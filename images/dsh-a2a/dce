@@ -1,0 +1,14 @@
+#!/bin/sh
+# 用当前请求的用户身份登录后再执行 dce。
+# JWT 由 shim 写进 /run/dsh/token（0600），不进入 prompt，也不落进 skill 文件。
+TOKEN_FILE=/run/dsh/token
+STAMP=/run/dsh/token.stamp
+if [ -f "$TOKEN_FILE" ]; then
+  T=$(cat "$TOKEN_FILE" 2>/dev/null)
+  LAST=$(cat "$STAMP" 2>/dev/null)
+  if [ -n "$T" ] && [ "$T" != "$LAST" ]; then
+    dce-bin auth login --hostname "${DCE_HOST:-http://dce.example.com}" \
+      --with-token --skip-validate < "$TOKEN_FILE" >/dev/null 2>&1 && printf %s "$T" > "$STAMP"
+  fi
+fi
+exec dce-bin "$@"

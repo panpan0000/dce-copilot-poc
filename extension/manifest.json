@@ -1,0 +1,34 @@
+{
+  "manifest_version": 3,
+  "name": "DCE Agent POC Bridge",
+  "version": "0.4.1",
+  "description": "在 DCE 页面内把当前用户会话转发到 Kubernetes POC Agent。",
+  "permissions": [
+    "scripting",
+    "storage"
+  ],
+  "host_permissions": [
+    "http://10.31.223.20:31284/*",
+    "http://127.0.0.1:30489/*"
+  ],
+  "background": {
+    "service_worker": "service_worker.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "http://10.31.223.20:31284/*"
+      ],
+      "js": [
+        "content.js"
+      ],
+      "css": [
+        "panel.css"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_title": "DCE Agent POC"
+  }
+}

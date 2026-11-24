@@ -1,0 +1,35 @@
+# POC 运行时覆盖，固定标签仅在本机 OrbStack 可用
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kagent-controller
+  namespace: kagent
+spec:
+  template:
+    spec:
+      containers:
+      - name: controller
+        image: kagent-controller-resume-fix:0.10.0-beta6
+        imagePullPolicy: IfNotPresent
+---
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: kagent-default
+  namespace: kagent
+spec:
+  replicas: 3
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: substrate-adapter
+  namespace: watsons-agent-poc
+spec:
+  template:
+    spec:
+      containers:
+      - name: adapter
+        env:
+        - name: SESSION_EPOCH
+          value: '8'

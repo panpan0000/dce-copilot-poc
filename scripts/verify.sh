@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+echo "TODO: scripts/verify.sh 尚未实现"
+exit 1
