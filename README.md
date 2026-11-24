@@ -86,7 +86,7 @@ deploy/
   jwks/                DCE 的 JWKS（公钥，构建期不打包，运行时挂载）
 extension/             Chrome MV3，config.js 由 make extension 生成
 scripts/               check / build / bootstrap / deploy / verify / netpol-test
-docs/                  architecture / replicate / gotchas / security / mock-dce
+docs/                  architecture / install / gotchas / security / mock-dce
 ```
 
 ---
@@ -180,7 +180,7 @@ kagent-resume-race.patch            # 补丁本体
 ## 文档
 
 - [docs/architecture.md](docs/architecture.md) —— 链路、组件职责、为什么自研
-- [docs/replicate.md](docs/replicate.md) —— 换一套 K8s 集群复刻（含 DCE 侧依赖）
+- [docs/install.md](docs/install.md) —— 从零安装（前置条件、镜像、bootstrap、deploy、verify）
 - [docs/gotchas.md](docs/gotchas.md) —— 踩过的坑：gVisor、valkey、会话代数、MV3 30s、SSE 断流
 - [docs/security.md](docs/security.md) —— 威胁模型与已知边界
 - [docs/mock-dce.md](docs/mock-dce.md) —— 没有 DCE 时怎么跑（TODO）
