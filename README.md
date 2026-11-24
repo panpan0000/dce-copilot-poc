@@ -237,7 +237,11 @@ TOKEN_FILE=~/token.txt make verify  # token 从浏览器 localStorage['ANAKIN_TO
 | `adapter` | 身份→会话、SSE 流式、DCE kubeconfig |
 | `controller-fix` | kagent controller + 唤醒竞态补丁（先跑 `images/controller-fix/build-controller.sh`） |
 
-默认构建 `linux/amd64`；`TARGET_PLATFORM` 可改。本机是 Apple Silicon 但目标集群是 x86 时**必须**保持 amd64，否则镜像在节点上起不来。
+默认构建 `linux/amd64`；`TARGET_PLATFORM` 可改。
+
+**注意**：`dsh-a2a` / `sre-agent` 基于 `DSH_BASE_IMAGE`，这个基础镜像通常只发布一种架构。
+`make build` 会先比对两者架构，不一致直接报错——因为交叉构建一定失败，或者镜像到了节点上 `exec format error`。
+要在 x86 集群跑，就得有 amd64 的 DSH 基础镜像；只有 `adapter` / `controller-fix` 是真多架构（基于 busybox / golang）。
 
 ## 上游状态：beta6 与 main
 

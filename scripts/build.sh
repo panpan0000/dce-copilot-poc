@@ -64,6 +64,16 @@ ok "skills: $(ls "$CTX_DSH/skills" | tr '\n' ' ')"
 
 # ── 2) 构建 ────────────────────────────────────────────────
 TARGET_PLATFORM="${TARGET_PLATFORM:-linux/amd64}"
+
+# 基础镜像架构必须和目标架构一致：DSH 基础镜像通常只有一种架构，
+# 交叉构建会在 build 时失败（或在节点上 exec format error）。
+BASE_ARCH="$("$DOCKER" image inspect "$DSH_BASE_IMAGE" --format '{{.Os}}/{{.Architecture}}' 2>/dev/null || true)"
+if [ -n "$BASE_ARCH" ] && [ "$BASE_ARCH" != "$TARGET_PLATFORM" ]; then
+  die "DSH_BASE_IMAGE 是 $BASE_ARCH，但 TARGET_PLATFORM=$TARGET_PLATFORM。
+      两种处理：
+        1) 把 TARGET_PLATFORM 改成 $BASE_ARCH（同架构集群直接跑）
+        2) 准备一份 $TARGET_PLATFORM 的 DSH 基础镜像，并改 DSH_BASE_IMAGE"
+fi
 build() {
   local name="$1" ctx="$2"; shift 2
   local ref; ref="$(image_ref "$name")"
