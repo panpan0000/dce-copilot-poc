@@ -54,6 +54,14 @@ fi
 "$KUBECTL" apply -f "$RENDER/workerpool.yaml"
 "$KUBECTL" apply -f "$RENDER/sandboxagent.yaml"
 
+if [ "${WITH_NETWORKPOLICY:-false}" = "true" ]; then
+  log "应用 NetworkPolicy（WITH_NETWORKPOLICY=true）"
+  "$KUBECTL" apply -f "$RENDER/networkpolicy.yaml"
+  warn "装了策略就要自证: make netpol-test"
+else
+  log "跳过 NetworkPolicy（默认不装，避免 CNI 不执行时给人假安全感）"
+fi
+
 # ── 等就绪 ────────────────────────────────────────────────
 log "等待 adapter / SRE 就绪"
 "$KUBECTL" -n "$NS_APP" rollout status deploy/substrate-adapter --timeout=180s

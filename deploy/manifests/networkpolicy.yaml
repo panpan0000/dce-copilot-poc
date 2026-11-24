@@ -1,0 +1,27 @@
+# 只在 WITH_NETWORKPOLICY=true 时被 deploy.sh 应用。
+# 目的不是"按用户隔离"（同 worker 上的 actor 共享网络命名空间，做不到），
+# 而是收敛入口与出网：只允许网关进 adapter，只允许 adapter 出到 controller。
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: agent-ingress-from-gateway, namespace: ${NS_APP}}
+spec:
+  podSelector:
+    matchLabels: {app: substrate-adapter}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels: {kubernetes.io/metadata.name: ${NS_GATEWAY}}
+      ports: [{protocol: TCP, port: 9099}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: sre-only-from-gateway, namespace: ${NS_APP}}
+spec:
+  podSelector:
+    matchLabels: {app: sre-agent}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: {matchLabels: {app: sre-gateway}}
+      ports: [{protocol: TCP, port: 8080}]
