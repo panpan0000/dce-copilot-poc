@@ -2,8 +2,20 @@
 // choose a destination, path, or backend on behalf of the page.
 // 由构建脚本生成的 config.js 提供；缺失时回落到默认值（本地开发用）
 const CFG = (typeof globalThis !== 'undefined' && globalThis.DCE_AGENT_CONFIG) || {};
-const DCE_ORIGIN = CFG.dceOrigin || 'http://dce.example.com';
-const GATEWAY_BASE = CFG.gatewayBase || 'http://agent.example.com';
+let DCE_ORIGIN = CFG.dceOrigin || 'http://dce.example.com';
+let GATEWAY_BASE = CFG.gatewayBase || 'http://agent.example.com';
+let configReady;
+// 配置优先级：chrome.storage（设置页） > config.js（构建期） > 默认值
+function ensureConfig() {
+  if (!configReady) {
+    configReady = chrome.storage.local.get(['dceOrigin', 'gatewayBase']).then((c) => {
+      if (c.dceOrigin) { DCE_ORIGIN = c.dceOrigin.replace(/\/$/, ''); CFG.dceOrigin = DCE_ORIGIN; }
+      if (c.gatewayBase) { GATEWAY_BASE = c.gatewayBase.replace(/\/$/, ''); CFG.gatewayBase = GATEWAY_BASE; }
+    }).catch(() => {});
+  }
+  return configReady;
+}
+
 const DCE_USER_URL = `${DCE_ORIGIN}/apis/ghippo.io/v1alpha1/current-user`;
 
 // DCE API 端点（已按 docs.daocloud.io/openapi 的 kpanda / insight / baize 规格核对）。
@@ -319,6 +331,7 @@ async function handleMessage(message, sender) {
 chrome.runtime.onConnect.addListener((port) => {
   if (port.name !== 'dsh-stream') return;
   port.onMessage.addListener(async (msg) => {
+    await ensureConfig();
     // 心跳：内容脚本每 12s 发一次，既保活后台，也确认端口还通
     if (msg?.type === 'ping') {
       try { port.postMessage({ type: 'pong' }); } catch {}
@@ -373,6 +386,7 @@ function senderTabId(port) {
 }
 
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  ensureConfig();
   handleMessage(message, sender)
     .then(sendResponse)
     .catch((error) => sendResponse({

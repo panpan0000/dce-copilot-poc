@@ -8,8 +8,7 @@
     "storage"
   ],
   "host_permissions": [
-    "http://10.31.223.20:31284/*",
-    "http://127.0.0.1:30489/*"
+    "<all_urls>"
   ],
   "background": {
     "service_worker": "service_worker.js"
@@ -30,5 +29,6 @@
   ],
   "action": {
     "default_title": "DCE Agent POC"
-  }
+  },
+  "options_page": "options.html"
 }

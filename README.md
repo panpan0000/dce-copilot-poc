@@ -151,15 +151,40 @@ make bootstrap
 官方 Helm 顺序：Gateway API CRD → kgateway → substrate → kagent。
 开头会预检 gVisor / 默认 StorageClass / LoadBalancer，缺什么当场报错（这三样装不出来，必须预先准备）。
 
-### 5. 部署应用 + 扩展 + 验证
+### 5. 部署应用
 
 ```bash
-make deploy        # 会打印入口地址，把它填回 EXTENSION_GATEWAY_BASE
-make extension     # 生成 build/extension/，在 chrome://extensions 加载
+make deploy
+```
+
+结束时会打印入口地址，例如：
+
+```
+入口  http://192.168.194.153:8080/sandbox
+```
+
+### 6. 加载浏览器扩展（不用构建）
+
+仓库里 `extension/` 就是可直接加载的扩展，**不需要 `make extension`**：
+
+1. Chrome 打开 `chrome://extensions`
+2. 右上角打开 **开发者模式**
+3. 点 **加载已解压的扩展程序**
+4. 选择仓库里的 `extension/` 目录
+5. 点扩展的 **详情 → 扩展程序选项**，填两项：
+   - **DCE 控制台地址**：你平时登录 DCE 的浏览器地址，如 `http://10.31.223.20:31284`
+   - **入口网关地址**：`make deploy` 打印的那个，如 `http://192.168.194.153:8080`
+6. 保存，然后**刷新 DCE 页面**——右下角会出现带 `当前用户 <你的用户名>` 的面板
+
+> 想改默认值（比如批量分发）才需要 `make extension`，它会把地址写进 `config.js`，省掉第 5 步。
+
+### 7. 验证
+
+```bash
 TOKEN_FILE=~/token.txt make verify
 ```
 
-`~/token.txt` 就是上面 `copy(...)` 得到的那串 token（**仅用于命令行验证**）。9 条用例全 PASS 才算装好。
+`~/token.txt` 里放当前 DCE 用户的 JWT（**仅用于命令行验证**，扩展自己会读，不需要手工填）。9 条全 PASS 才算装好。
 
 ## 仓库结构
 

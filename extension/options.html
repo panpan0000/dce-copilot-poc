@@ -1,0 +1,14 @@
+<!doctype html><meta charset="utf-8"><title>DCE Copilot 设置</title>
+<style>body{font:14px/1.6 -apple-system,"PingFang SC",sans-serif;max-width:520px;margin:40px auto;padding:0 16px}
+label{display:block;margin:16px 0 4px;font-weight:600}input{width:100%;padding:8px;border:1px solid #dde3ee;border-radius:6px}
+button{margin-top:20px;padding:8px 18px;background:#1b63f0;color:#fff;border:0;border-radius:6px;cursor:pointer}
+p{color:#6b7685}code{background:#f0f3f9;padding:1px 4px;border-radius:3px}</style>
+<h2>DCE Copilot 设置</h2>
+<p>填两项即可，改完点保存，然后刷新 DCE 页面。</p>
+<label for="dce">DCE 控制台地址（登录 DCE 的浏览器地址）</label>
+<input id="dce" placeholder="http://10.31.223.20:31284">
+<label for="gw">入口网关地址（make deploy 打印的地址）</label>
+<input id="gw" placeholder="http://192.168.1.240:8080">
+<button id="save">保存</button>
+<p id="msg"></p>
+<script src="options.js"></script>
