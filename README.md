@@ -87,7 +87,30 @@ copy(localStorage.getItem('ANAKIN_TOKEN'))
 
 到 https://jwt.io 粘进去，看 payload 的 `iss` 和 `aud`，分别填给 `JWT_ISSUER` / `JWT_AUDIENCE`（本项目默认值就是常见形态，一般不用改）。
 
-### 1. 配置文件
+### 1. 前置：集群能拉到镜像
+
+默认直接使用已发布的镜像，集群必须能访问并拉取：
+
+```
+release-ci.daocloud.io/common-ci/dce-copilot-dsh-a2a:0.1.0
+release-ci.daocloud.io/common-ci/dce-copilot-adapter:0.1.0
+release-ci.daocloud.io/common-ci/dce-copilot-sre-agent:0.1.0
+```
+
+先验证一句（在集群里能跑一个 Pod）：
+
+```bash
+kubectl run pulltest --image=release-ci.daocloud.io/common-ci/dce-copilot-adapter:0.1.0 \
+  --restart=Never --command -- sleep 5 && kubectl get pod pulltest
+```
+
+- 拉得到 → 继续，**不需要 `make build`**
+- 拉不到（网络不通 / 需要认证）→ 三选一：
+  1. 配 `imagePullSecrets` 后继续用已发布镜像
+  2. 用 `docker pull` 再 `docker tag` + 推到你自己集群能拉的仓库，改 `IMAGE_REGISTRY`
+  3. 从源码构建（见文末「自己构建镜像」）
+
+### 2. 配置文件
 
 ```bash
 cp config.env.example .env
@@ -105,7 +128,7 @@ $EDITOR secrets/.env.secret     # 填 DEEPSEEK_API_KEY
 **镜像仓库怎么填**：如果只用官方已发布的镜像，`IMAGE_REGISTRY=release-ci.daocloud.io/common-ci`、`IMAGE_TAG=0.1.0`，跳过第 2 步。
 要自己构建，填一个集群能拉到的仓库地址（`make build` 后 `docker push` 会推到它）。
 
-### 2. 自检
+### 3. 自检
 
 ```bash
 make check
@@ -113,15 +136,6 @@ make check
 
 它会逐项告诉你：哪个配置是空的、哪个还是模板值、DCE 连不连得上、集群有没有默认 StorageClass、CNI 能不能执行 NetworkPolicy。
 **这一步不过就别往下走**。
-
-### 3. 构建镜像（可选）
-
-```bash
-make build
-```
-
-4 个镜像：`dsh-a2a`（Actor 运行时）、`sre-agent`、`adapter`、`controller-fix`。
-前三个会自动取 `dce` CLI（按架构下载）和 skills（按 tag 克隆）；离线环境把二进制放 `build/` 下即可。
 
 ### 4. 装基础组件
 
@@ -260,3 +274,22 @@ kagent-resume-race.patch            # 补丁本体
 - kagent / substrate / kgateway / agentgateway：各自上游许可证
 - `dce` CLI 与 skills：[DaoCloud/daocloud-skills](https://github.com/DaoCloud/daocloud-skills)（构建期获取，不 vendor）
 - DSH 运行时基础镜像：需自行提供（仓库不含）
+
+## 自己构建镜像
+
+默认不需要构建（用已发布镜像）。要改代码或换基础镜像时才用：
+
+```bash
+IMAGE_REGISTRY=<你的仓库> IMAGE_PREFIX= IMAGE_TAG=<tag> PUSH_IMAGES=true make build
+```
+
+4 个镜像：
+
+| 镜像 | 内容 |
+|---|---|
+| `dsh-a2a` | Actor 运行时：DSH + A2A shim + `dce` CLI + skills |
+| `sre-agent` | 独立 SRE Agent |
+| `adapter` | 身份→会话、SSE 流式、DCE kubeconfig |
+| `controller-fix` | kagent controller + 唤醒竞态补丁（需先跑 `images/controller-fix/build-controller.sh`） |
+
+构建期自动取 `dce` CLI（按架构下载）与 skills（按 tag 克隆）；离线环境把它们放到 `build/` 下即可。

@@ -59,4 +59,4 @@ pick_docker() {
   export DOCKER
 }
 
-image_ref() { printf '%s/%s:%s' "$IMAGE_REGISTRY" "$1" "$IMAGE_TAG"; }
+image_ref() { printf '%s/%s%s:%s' "$IMAGE_REGISTRY" "${IMAGE_PREFIX:-}" "$1" "$IMAGE_TAG"; }
