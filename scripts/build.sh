@@ -63,13 +63,19 @@ build() {
   ok "$ref"
 }
 
+# SRE agent 复用同一个基础镜像
+cp "$REPO_ROOT"/images/sre-agent/* "$BUILD_DIR"/ 2>/dev/null || true
+mkdir -p "$BUILD_DIR/ctx-sre"
+cp "$REPO_ROOT"/images/sre-agent/{sre-agent.js,cluster-inspect.js,start.sh,Dockerfile} "$BUILD_DIR/ctx-sre"/
+
 build dsh-a2a "$CTX_DSH" --build-arg "DSH_BASE_IMAGE=$DSH_BASE_IMAGE"
+build sre-agent "$BUILD_DIR/ctx-sre" --build-arg "DSH_BASE_IMAGE=$DSH_BASE_IMAGE"
 build adapter "$REPO_ROOT/images/adapter"
 build controller-fix "$REPO_ROOT/images/controller-fix"
 
 # ── 3) 推送（可选） ────────────────────────────────────────
 if [ "${PUSH_IMAGES:-false}" = "true" ]; then
-  for n in dsh-a2a adapter controller-fix; do
+  for n in dsh-a2a sre-agent adapter controller-fix; do
     ref="$(image_ref "$n")"
     log "推送 $ref"
     "$DOCKER" push "$ref"
@@ -78,7 +84,7 @@ fi
 
 # ── 4) 输出 digest（BYO SandboxAgent 必须用 digest 固定） ──
 log "镜像 digest（deploy 时会自动写入 SandboxAgent）"
-for n in dsh-a2a adapter controller-fix; do
+for n in dsh-a2a sre-agent adapter controller-fix; do
   ref="$(image_ref "$n")"
   d="$("$DOCKER" image inspect "$ref" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)"
   printf '  %-16s %s\n' "$n" "${d:-<未推送，无 digest>}"

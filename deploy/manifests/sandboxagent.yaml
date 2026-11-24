@@ -1,0 +1,44 @@
+# Actor 模板：DSH + dce CLI + skills，跑在 Substrate 沙箱里。
+# 注意：BYO 只支持 env，volumes/volumeMounts 不会传给 Actor。
+apiVersion: kagent.dev/v1alpha2
+kind: SandboxAgent
+metadata:
+  name: dsh-sandbox
+  namespace: ${NS_KAGENT}
+spec:
+  type: BYO
+  description: "DSH 运行在 Substrate gVisor 沙箱；模型经 DSH 调用云端 API，模型不在沙箱内"
+  substrate:
+    workerPoolRef:
+      name: kagent-default
+    snapshotsConfig:
+      location: ${SNAPSHOT_LOCATION}
+  sandbox:
+    network:
+      # 为空 = 拒绝所有出网；这里只放行模型 API
+      allowedDomains:
+        - api.deepseek.com
+        - "*.deepseek.com"
+  byo:
+    deployment:
+      cmd: /bin/sh
+      args: ["/opt/dsh-a2a/start.sh"]
+      # BYO 要求 digest 固定，deploy.sh 会回填
+      image: ${IMAGE_DSH_A2A_DIGEST}
+      imagePullPolicy: IfNotPresent
+      securityContext:
+        runAsUser: 0
+        runAsGroup: 0
+      env:
+        - name: DSH_PERMISSION_MODE
+          value: danger-full-access
+        - name: DSH_REASONING_EFFORT
+          value: "${DSH_REASONING_EFFORT}"
+        - name: DCE_HOST
+          value: "${DCE_ORIGIN}"
+        - name: DEEPSEEK_API_KEY
+          valueFrom:
+            secretKeyRef: {name: dsh-config, key: DEEPSEEK_API_KEY}
+      resources:
+        requests: {cpu: 200m, memory: 512Mi}
+        limits: {memory: 3Gi}

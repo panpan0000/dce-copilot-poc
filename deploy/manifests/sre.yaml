@@ -1,0 +1,135 @@
+# 独立 SRE Agent：不在用户 Actor 内，只经 agentgateway 暴露两个固定入口。
+apiVersion: v1
+kind: ServiceAccount
+metadata: {name: sre-poc, namespace: ${NS_APP}}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata: {name: sre-poc-readonly}
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/log", "nodes", "services", "events", "namespaces", "configmaps"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "replicasets", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata: {name: sre-poc-readonly}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: ClusterRole, name: sre-poc-readonly}
+subjects:
+  - {kind: ServiceAccount, name: sre-poc, namespace: ${NS_APP}}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata: {name: sre-gateway-config, namespace: ${NS_APP}}
+data:
+  agentgateway.yaml: |
+    config:
+      adminAddr: "127.0.0.1:15000"
+      statsAddr: "127.0.0.1:15020"
+      readinessAddr: "127.0.0.1:15021"
+    gateways:
+      default: {port: 3088}
+    routes:
+    - name: fixed-inspection
+      matches: [{method: POST, path: {exact: /sre/poc/inspect}}]
+      policies:
+        jwtAuth:
+          mode: strict
+          issuer: ${JWT_ISSUER}
+          audiences: [${JWT_AUDIENCE}]
+          jwks: {file: /config/jwks.json}
+        urlRewrite: {path: {full: /v1/inspections}}
+        transformations:
+          request:
+            set: {content-type: '"application/json"'}
+            remove: [content-encoding]
+            body: 'toJson({"cluster":"${SRE_TARGET_CLUSTER}","scope":"health"})'
+      backends:
+      - host: sre-poc.${NS_APP}.svc.cluster.local:8080
+        policies:
+          backendAuth: {key: {value: {file: /run/secrets/sre-backend-token}}}
+    - name: latest-report
+      matches: [{method: GET, path: {exact: /sre/poc/reports/latest}}]
+      policies:
+        jwtAuth:
+          mode: strict
+          issuer: ${JWT_ISSUER}
+          audiences: [${JWT_AUDIENCE}]
+          jwks: {file: /config/jwks.json}
+        urlRewrite: {path: {full: /v1/inspections/latest}}
+      backends:
+      - host: sre-poc.${NS_APP}.svc.cluster.local:8080
+        policies:
+          backendAuth: {key: {value: {file: /run/secrets/sre-backend-token}}}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: sre-gateway, namespace: ${NS_APP}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: sre-gateway}}
+  template:
+    metadata: {labels: {app: sre-gateway}}
+    spec:
+      automountServiceAccountToken: false
+      containers:
+        - name: agentgateway
+          image: cr.agentgateway.dev/agentgateway:v1.7.0
+          args: ["-f", "/config/agentgateway.yaml"]
+          ports: [{containerPort: 3088}]
+          volumeMounts:
+            - {name: config, mountPath: /config, readOnly: true}
+            - {name: jwks, mountPath: /config/jwks.json, subPath: jwks.json, readOnly: true}
+            - {name: secret, mountPath: /run/secrets/sre-backend-token, subPath: token, readOnly: true}
+          resources:
+            requests: {cpu: 50m, memory: 64Mi}
+            limits: {memory: 256Mi}
+      volumes:
+        - {name: config, configMap: {name: sre-gateway-config}}
+        - {name: jwks, configMap: {name: dce-jwks}}
+        - {name: secret, secret: {secretName: sre-backend-token}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: sre-gateway, namespace: ${NS_APP}}
+spec:
+  selector: {app: sre-gateway}
+  ports: [{name: http, port: 8080, targetPort: 3088}]
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: sre-agent, namespace: ${NS_APP}}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: sre-agent}}
+  template:
+    metadata: {labels: {app: sre-agent}}
+    spec:
+      serviceAccountName: sre-poc
+      containers:
+        - name: sre
+          image: ${IMAGE_SRE_AGENT}
+          imagePullPolicy: IfNotPresent
+          env:
+            - {name: DSH_PERMISSION_MODE, value: danger-full-access}
+          ports: [{containerPort: 8080}]
+          volumeMounts:
+            - {name: model, mountPath: /model, readOnly: true}
+            - {name: secret, mountPath: /run/secrets/sre-backend-token, subPath: token, readOnly: true}
+          resources:
+            requests: {cpu: 100m, memory: 256Mi}
+            limits: {memory: 1Gi}
+      volumes:
+        - {name: model, secret: {secretName: dsh-config, items: [{key: .credentials.yaml, path: credentials}]}}
+        - {name: secret, secret: {secretName: sre-backend-token}}
+---
+apiVersion: v1
+kind: Service
+metadata: {name: sre-poc, namespace: ${NS_APP}}
+spec:
+  selector: {app: sre-agent}
+  ports: [{name: http, port: 8080, targetPort: 8080}]

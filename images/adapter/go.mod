@@ -1,3 +1,3 @@
-module github.com/daocloud/kgateway-substrate-poc
+module github.com/daocloud/dce-copilot-mini-poc
 
 go 1.24

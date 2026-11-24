@@ -1,7 +1,9 @@
 // The two values below are deliberately constants.  The content script cannot
 // choose a destination, path, or backend on behalf of the page.
-const DCE_ORIGIN = 'http://10.31.223.20:31284';
-const GATEWAY_BASE = 'http://127.0.0.1:30489';
+// 由构建脚本生成的 config.js 提供；缺失时回落到默认值（本地开发用）
+const CFG = (typeof globalThis !== 'undefined' && globalThis.DCE_AGENT_CONFIG) || {};
+const DCE_ORIGIN = CFG.dceOrigin || 'http://dce.example.com';
+const GATEWAY_BASE = CFG.gatewayBase || 'http://agent.example.com';
 const DCE_USER_URL = `${DCE_ORIGIN}/apis/ghippo.io/v1alpha1/current-user`;
 
 // DCE API 端点（已按 docs.daocloud.io/openapi 的 kpanda / insight / baize 规格核对）。

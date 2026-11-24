@@ -1,0 +1,7 @@
+apiVersion: ate.dev/v1alpha1
+kind: WorkerPool
+metadata:
+  name: kagent-default
+  namespace: ${NS_KAGENT}
+spec:
+  replicas: ${WORKER_REPLICAS:-3}

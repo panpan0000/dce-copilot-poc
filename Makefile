@@ -10,7 +10,7 @@ config: ## 生成 .env（若不存在）
 check: ## 校验配置项与依赖命令
 	@scripts/check.sh
 
-build: ## 构建 3 个镜像（dsh-a2a / adapter / controller-fix）
+build: ## 构建 4 个镜像（dsh-a2a / sre-agent / adapter / controller-fix）
 	@scripts/build.sh
 
 bootstrap: ## 安装基础组件（Gateway API + kgateway + substrate + kagent）

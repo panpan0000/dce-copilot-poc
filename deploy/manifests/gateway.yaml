@@ -1,0 +1,66 @@
+# 入口：JWT 校验 + 路由到 adapter。
+# 网关是"策略点"：限流、TLS、按用户配额都在这里加，adapter 不做这些。
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: poc-gateway
+  namespace: ${NS_APP}
+spec:
+  gatewayClassName: kgateway
+  listeners:
+    - name: http
+      port: 8080
+      protocol: HTTP
+      allowedRoutes:
+        namespaces: {from: Same}
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: GatewayExtension
+metadata:
+  name: dce-jwt
+  namespace: ${NS_APP}
+spec:
+  jwt:
+    providers:
+      - name: dce
+        issuer: ${JWT_ISSUER}
+        audiences: [${JWT_AUDIENCE}]
+        forwardToken: true          # adapter 需要原始 JWT 去换 kubeconfig
+        jwks:
+          local:
+            inline: '${JWKS_INLINE}'
+---
+apiVersion: gateway.kgateway.dev/v1alpha1
+kind: TrafficPolicy
+metadata:
+  name: dce-jwt-auth
+  namespace: ${NS_APP}
+spec:
+  targetRefs:
+    - group: gateway.networking.k8s.io
+      kind: Gateway
+      name: poc-gateway
+  jwtAuth:
+    extensionRef: {name: dce-jwt}
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: substrate-sandbox
+  namespace: ${NS_APP}
+spec:
+  parentRefs:
+    - {group: gateway.networking.k8s.io, kind: Gateway, name: poc-gateway}
+  rules:
+    - matches:
+        - path: {type: PathPrefix, value: /sandbox}
+      filters:
+        - type: URLRewrite
+          urlRewrite:
+            path: {type: ReplacePrefixMatch, replacePrefixMatch: /}
+      backendRefs:
+        - {group: "", kind: Service, name: substrate-adapter, port: 9099}
+      # 流式：必须大于 shim 单轮上限，否则长任务会被网关先掐断
+      timeouts:
+        request: 300s
+        backendRequest: 300s

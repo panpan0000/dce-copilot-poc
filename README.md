@@ -1,4 +1,4 @@
-# dsh-sandbox-poc
+# dce-copilot-mini-poc
 
 **每个 DCE 用户，在浏览器里和自己的沙箱 Agent 对话；Agent 用这个用户自己的身份调用 DCE API 和 kubectl。**
 
