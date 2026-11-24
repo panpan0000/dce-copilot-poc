@@ -133,6 +133,39 @@ TOKEN_FILE=~/token.txt make verify  # token 从浏览器 localStorage['ANAKIN_TO
 
 细节在 [docs/gotchas.md](docs/gotchas.md)，按"现象 → 原因 → 已做的处理"组织，不复述排查过程。
 
+## 镜像在哪
+
+公开（公司内网 registry）：
+
+```
+release-ci.daocloud.io/common-ci/dce-copilot-dsh-a2a:0.1.0      # Actor 运行时（DSH + shim + dce CLI + skills）
+release-ci.daocloud.io/common-ci/dce-copilot-adapter:0.1.0      # substrate-adapter
+release-ci.daocloud.io/common-ci/dce-copilot-sre-agent:0.1.0    # 独立 SRE Agent
+```
+
+本仓库只放 Dockerfile 与源码，**不放镜像**；`make build` 会从源码重建，`IMAGE_REGISTRY` 指向上面的地址即可直接复用。
+
+### controller 的存档
+kagent controller 的唤醒竞态补丁没有发布镜像（基于上游 beta6，带 10 行改动），仓库里留的是**可重建的存档**：
+
+```
+images/controller-fix/
+├── Dockerfile                      # 把编译产物盖到官方 beta6 镜像上
+├── build-controller.sh             # 从 kagent 源码 + 补丁构建（需 Go 1.26.3 + 官方 ldflags）
+├── UPSTREAM-ISSUE.md               # 问题记录
+└── poc-overrides.yaml
+kagent-resume-race.patch            # 补丁本体
+```
+
+## 上游状态：beta6 与 main
+
+我们钉在 `v0.10.0-beta6`（预发布快照）。上游 main 后来**重写了 Session 与挂起的协调逻辑**，我们补丁针对的那段等待代码在 main 上已不存在。
+
+- 在 beta6 上，同一个会话连续两次请求，若第二次正好落在"上一轮结束 → 挂起"的窗口，controller 会一直等到超时；补丁让它在发现 `SUSPENDED` 时再唤醒一次。
+- 在 main 上，这段逻辑被替换；用可控测试（真 PostgreSQL + 假 Actor）没能复现同样的卡死。
+- 结论：**这是 beta6 的问题，不是需要上游修的新 bug**。我们保留补丁 + 版本钉子，不提交 issue。
+- 升级到 main 不是换镜像：kagent / Substrate / CRD / adapter 都要一起动，且必须在真实链路上重跑 `make verify` 才能下结论。
+
 ## 分发策略
 
 | 决定 | 为什么 |
