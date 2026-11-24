@@ -1,6 +1,27 @@
-# kagent 0.10.0-beta6 的 values（按目标集群调整）
+# kagent 0.10.0-beta6 的 values（从本机 release 导出后脱敏，按目标集群调整）
+# 关键：开启 substrate 集成 + WorkerPool；其余示例 Agent 全部关闭以省内存
+controller:
+  substrate:
+    enabled: true
+    ateApiEndpoint: dns:///api.${NS_SUBSTRATE}.svc:443
+    ateApiInsecure: true
+    ateApiTokenFile: /var/run/secrets/tokens/ate-api/token
+    atenetRouterURL: http://atenet-router.${NS_SUBSTRATE}.svc:80
+    defaultWorkerPool:
+      name: kagent-default
+      namespace: ${NS_KAGENT}
+
+# WorkerPool：actor 只在"一轮对话进行中"占用 worker，按并发轮次估，不按用户数
 substrateWorkerPool:
-  replicas: ${WORKER_REPLICAS:-3}
-# 关掉自带的示例 Agent，省内存（它们与本 POC 无关）
+  create: true
+  name: kagent-default
+  replicas: ${WORKER_REPLICAS}
+  ateomImage: ghcr.io/kagent-dev/substrate/ateom-gvisor:${SUBSTRATE_VERSION}
+
+# 这些都是 kagent 自带的示例 Agent / 监控，与本 POC 无关
+grafana-mcp: {enabled: false}
+observability-agent: {enabled: false}
 kmcp:
-  enabled: true
+  resources:
+    requests: {cpu: 100m}
+    limits: {memory: 256Mi}

@@ -1,8 +1,11 @@
-# substrate v0.0.8 的 values（按目标集群调整）
-# 关键项：快照存储（rustfs 或 S3 兼容）、valkey、Actor 本地目录
-# 参考: helm show values oci://ghcr.io/kagent-dev/substrate/helm/substrate --version 0.0.8
+# substrate 0.0.8 的 values（从本机 release 导出后脱敏）
+# 单节点 Valkey 仅用于 POC：换 IP 后必须重设 cluster-announce-ip/bus-port
+valkey:
+  replicas: 1
+
 storage:
   className: ${STORAGE_CLASS}
+
 snapshots:
-  # 快照后端；本地默认用打包的 rustfs
+  # 快照后端：默认用打包的 rustfs；生产可换成 S3 兼容对象存储
   backend: rustfs
