@@ -28,16 +28,16 @@
 - **原因**：三处叠加——网关超时、MV3 后台 30 秒空闲被回收、SSE 链路断。
 - **处理**：网关 300s；shim 心跳；扩展断线自动回落非流式并补全答案。
 
-## 6. Valkey 重置后服务起不来
-- **现象**：`dial tcp :6379: connection refused` / MOVED 重定向失败。
+## 6. 清库或换 IP 后服务起不来
+- **现象**：`dial tcp :6379: connection refused` 或 MOVED 重定向到空地址。
 - **原因**：单节点 Redis Cluster 若没设置对外宣告地址，客户端拿到的地址是空的。
 - **处理**：显式 `cluster-announce-ip` + `cluster-announce-bus-port` + `config rewrite`；
   文档里注明"换 IP 就要重新设置，不要照搬"。
 
-## 7. 换会话要改环境变量
-- **现象**：`SESSION_EPOCH` 每次 bump，所有用户的历史会话同时失效。
-- **原因**：早期没有删 Actor 的接口，只能用"整体换代"绕过卡死的 Actor。
-- **处理**：会话改成 `hash(用户 + 会话标识)`，每个会话独立；`SESSION_EPOCH` 保留但已不参与推导。
+## 7. 想给某个用户换一个新会话
+- **现象**：早期实现里换会话要改全局环境变量，一改所有用户的历史会话同时失效。
+- **原因**：没有删 Actor 的接口，只能用"整体换代"绕过卡死的 Actor。
+- **处理**：会话改为 `hash(用户 + 会话标识)`，每个会话独立；`SESSION_EPOCH` 保留但不再参与推导，换会话只需新的 `conversation_id`。
 
 ## 8. 用户根本看不到自己的 Pod
 - **现象**：Agent 说"你没有权限"，其实只是集群级 list 被拒。

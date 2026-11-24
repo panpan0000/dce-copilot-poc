@@ -23,9 +23,22 @@ Agent 用这个用户自己的身份调用 DCE API 和 kubectl。
 SRE Agent 独立运行，只通过 agentgateway 暴露两个入口。
 
 > **前置条件：一个可用的 DCE 环境。** 本仓库是 DCE 的附庸——身份、权限、指标、Notebook 全部来自 DCE。
-> 没有 DCE 时只能跑 mock 模式（TODO: docs/mock-dce.md），链路里的授权部分没有意义。
+> 没有 DCE 时可以用 `images/mock-dce/` 起一个假 DCE 把对话链路跑通（授权部分没有意义），见 [docs/mock-dce.md](docs/mock-dce.md)。
 
 ---
+
+## 名词表
+
+| 词 | 指的是 |
+|---|---|
+| **DCE** | 你的企业云平台（本项目依赖它的登录、权限、指标与 Notebook 接口） |
+| **DSH** | DeepSeek Harness，跑在沙箱里的 Agent 运行时（对话 + 工具调用） |
+| **Actor** | 一个用户的沙箱实例。一个会话一个，空闲即挂起，下次恢复约 0.3 秒 |
+| **Substrate** | 管理 Actor 生命周期的组件（创建、挂起、快照、路由） |
+| **kagent** | 把 A2A 协议请求转给 Actor 的控制器 |
+| **kgateway** | 浏览器请求的入口（校验 JWT、限流、超时） |
+| **A2A** | Agent-to-Agent 协议，kagent 的入口协议 |
+| **alice / bob** | 文档里的示例用户，指两个不同 DCE 账号 |
 
 ## 60 秒理解架构
 
@@ -68,7 +81,7 @@ make extension                  # 生成扩展 config.js 并打包
 make verify                     # 端到端用例，输出 pass/fail
 ```
 
-`make verify` 是唯一能证明"复刻成功"的东西——README 不算。
+`make verify` 是唯一能证明"装好了"的东西——README 不算。
 
 ---
 
