@@ -228,7 +228,13 @@ TOKEN_FILE=~/token.txt make verify  # token 从浏览器 localStorage['ANAKIN_TO
 
 ## 镜像
 
-本项目**不提供现成镜像**，构建方式见快速开始第 3 步。四个镜像：
+本项目**不提供现成镜像**，构建方式见快速开始第 3 步。
+
+> ⚠️ 仓库作者在 `release-ci.daocloud.io/common-ci/` 上留过一套 `0.1.0` 的镜像，它们**只有 linux/arm64**
+> （在 Apple Silicon 上构建的），**amd64 集群拉下来会 `exec format error`**。请把它当作"构出来的样例"，
+> 不要直接用在 x86 集群上；正式使用请自己构建对应架构。
+
+四个镜像：
 
 | 镜像 | 内容 |
 |---|---|
