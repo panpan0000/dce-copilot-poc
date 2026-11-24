@@ -91,6 +91,34 @@ docs/                  architecture / replicate / gotchas / security / mock-dce
 
 ---
 
+## 已验证（2026-11-24，真实 DCE + 真实集群）
+
+`make verify` 在 alice 的真实 JWT 上跑满 9 条，全绿：
+
+| 用例 | 结果 |
+|---|---|
+| 未带 token 被网关拒绝 | PASS（401） |
+| whoami 解析到用户 | PASS（alice） |
+| 自然对话（非流式） | PASS |
+| 沙箱内执行 shell | PASS |
+| kubectl（本人身份） | PASS |
+| DCE API（dce CLI） | PASS |
+| SRE 巡检报告 | PASS（经 agentgateway → 独立 SRE） |
+| 流式返回 delta | PASS |
+| 流式返回 done | PASS |
+
+```
+结果: 9 pass · 0 fail · 0 skip
+```
+
+复现：
+
+```bash
+cp config.env.example .env          # 填 DCE / 镜像仓库 / 网关地址
+make check && make build && make bootstrap && make deploy && make extension
+TOKEN_FILE=~/token.txt make verify  # token 从浏览器 localStorage['ANAKIN_TOKEN'] 取
+```
+
 ## 已经解决过的问题（不需要你再踩）
 
 | 问题 | 结论 |
