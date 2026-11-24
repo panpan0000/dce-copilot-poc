@@ -28,5 +28,8 @@ verify: ## 跑一遍端到端用例，输出 pass/fail
 netpol-test: ## 验证 NetworkPolicy 真的生效（不通过则说明 CNI 不执行）
 	@scripts/netpol-test.sh
 
+mock-dce: ## 构建假 DCE（没有 DCE 时验证链路用）
+	@docker build -t mock-dce images/mock-dce
+
 clean: ## 清理构建产物
 	@rm -rf build dist
