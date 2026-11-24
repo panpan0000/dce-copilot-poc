@@ -43,10 +43,10 @@ fi
 echo "── 5. DCE 可达性 ───────────────────────────"
 code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$DCE_ORIGIN/apis/ghippo.io/v1alpha1/current-user" || true)
 case "$code" in
-  401|403) pass "DCE 可达，未带 token 返回 $code（符合预期）";;
+  401|403) pass "DCE 可达，未带 token 返回 ${code}（符合预期）";;
   200) warn "DCE 未鉴权就返回 200，检查是否真的需要身份";;
   000) fail "连不上 $DCE_ORIGIN";;
-  *) warn "DCE 返回 $code，确认地址是否正确";;
+  *) warn "DCE 返回 ${code}，确认地址是否正确";;
 esac
 
 echo "── 6. 镜像仓库 ─────────────────────────────"

@@ -32,21 +32,29 @@ case "$(uname -m)" in
 esac
 DCE_TARBALL="dce-${DCE_CLI_VERSION}-linux-${DCE_ARCH}.tar.gz"
 DCE_URL="https://github.com/DaoCloud/daocloud-skills/releases/download/${DCE_CLI_VERSION}/${DCE_TARBALL}"
-log "下载 dce CLI: $DCE_URL"
-curl -fsSL --retry 3 -o "$BUILD_DIR/$DCE_TARBALL" "$DCE_URL" \
-  || die "下载失败。离线环境请手动放到 $BUILD_DIR/$DCE_TARBALL 后重跑"
-tar -xzf "$BUILD_DIR/$DCE_TARBALL" -C "$BUILD_DIR"
-DCE_BIN="$(find "$BUILD_DIR" -maxdepth 2 -name dce -type f -perm -u+x | head -1)"
-[ -n "$DCE_BIN" ] || die "压缩包里没找到 dce 可执行文件"
-install -m 0755 "$DCE_BIN" "$CTX_DSH/dce-bin"
+if [ -x "$BUILD_DIR/dce-bin" ]; then
+  log "使用预置的 dce CLI: $BUILD_DIR/dce-bin（离线模式）"
+  install -m 0755 "$BUILD_DIR/dce-bin" "$CTX_DSH/dce-bin"
+else
+  log "下载 dce CLI: $DCE_URL"
+  curl -fsSL --retry 3 -o "$BUILD_DIR/$DCE_TARBALL" "$DCE_URL" \
+    || die "下载失败。离线环境请把可执行文件放到 $BUILD_DIR/dce-bin 后重跑"
+  tar -xzf "$BUILD_DIR/$DCE_TARBALL" -C "$BUILD_DIR"
+  DCE_BIN="$(find "$BUILD_DIR" -maxdepth 2 -name dce -type f -perm -u+x | head -1)"
+  [ -n "$DCE_BIN" ] || die "压缩包里没找到 dce 可执行文件"
+  install -m 0755 "$DCE_BIN" "$CTX_DSH/dce-bin"
+fi
 
 # 1b) skills：固定 tag 浅克隆，只取需要的几个
 log "获取 skills @ $DCE_SKILLS_VERSION"
 SKILLS_SRC="$BUILD_DIR/daocloud-skills"
-rm -rf "$SKILLS_SRC"
-git clone --depth 1 --branch "$DCE_SKILLS_VERSION" \
-  https://github.com/DaoCloud/daocloud-skills "$SKILLS_SRC" 2>/dev/null \
-  || die "clone 失败。离线环境请把仓库放到 $SKILLS_SRC"
+if [ -d "$SKILLS_SRC/skills" ]; then
+  log "使用预置的 skills: ${SKILLS_SRC}（离线模式）"
+else
+  git clone --depth 1 --branch "$DCE_SKILLS_VERSION" \
+    https://github.com/DaoCloud/daocloud-skills "$SKILLS_SRC" 2>/dev/null \
+    || die "clone 失败。离线环境请把仓库放到 $SKILLS_SRC 后重跑"
+fi
 mkdir -p "$CTX_DSH/skills"
 for s in dce container-management-pod-diagnosis container-management-cluster-diagnosis; do
   [ -d "$SKILLS_SRC/skills/$s" ] || die "skills 目录里没有 $s"
@@ -71,11 +79,16 @@ cp "$REPO_ROOT"/images/sre-agent/{sre-agent.js,cluster-inspect.js,start.sh,Docke
 build dsh-a2a "$CTX_DSH" --build-arg "DSH_BASE_IMAGE=$DSH_BASE_IMAGE"
 build sre-agent "$BUILD_DIR/ctx-sre" --build-arg "DSH_BASE_IMAGE=$DSH_BASE_IMAGE"
 build adapter "$REPO_ROOT/images/adapter"
-build controller-fix "$REPO_ROOT/images/controller-fix"
+if [ -f "$REPO_ROOT/images/controller-fix/codex-kagent-controller-fixed" ]; then
+  build controller-fix "$REPO_ROOT/images/controller-fix"
+else
+  warn "跳过 controller-fix：没有二进制。先跑 images/controller-fix/build-controller.sh（需要 Go 1.26.3 与官方 ldflags）"
+  SKIP_CONTROLLER=1
+fi
 
 # ── 3) 推送（可选） ────────────────────────────────────────
 if [ "${PUSH_IMAGES:-false}" = "true" ]; then
-  for n in dsh-a2a sre-agent adapter controller-fix; do
+  for n in dsh-a2a sre-agent adapter $( [ "${SKIP_CONTROLLER:-0}" = "1" ] || echo controller-fix ); do
     ref="$(image_ref "$n")"
     log "推送 $ref"
     "$DOCKER" push "$ref"

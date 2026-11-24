@@ -4,4 +4,4 @@ metadata:
   name: kagent-default
   namespace: ${NS_KAGENT}
 spec:
-  replicas: ${WORKER_REPLICAS:-3}
+  replicas: ${WORKER_REPLICAS}

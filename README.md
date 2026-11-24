@@ -1,6 +1,23 @@
 # dce-copilot-mini-poc
 
-**每个 DCE 用户，在浏览器里和自己的沙箱 Agent 对话；Agent 用这个用户自己的身份调用 DCE API 和 kubectl。**
+**BYOA（Bring Your Own Agent）for DCE** —— 每个 DCE 用户，在浏览器里和自己的沙箱 Agent 对话；
+Agent 用这个用户自己的身份调用 DCE API 和 kubectl。
+
+> BYOA = 能力归属不变、凭证归属不变、审计归属不变。
+> 共享一套集群和模型，但每个用户的 Agent 有自己的文件系统、自己的进程、自己的身份。
+> 不是"一个 Agent 服务所有人"，而是"每人生成一个 Agent，用完即挂起"。
+
+一张表说清区别：
+
+| | 共享 Copilot | **BYOA（本项目）** |
+|---|---|---|
+| 谁能用 | 所有人共用一个会话 | 每个用户一个会话 |
+| 身份 | Agent 用服务账号，再"假装"成用户 | Agent 直接用用户自己的 JWT / kubeconfig |
+| 越权 | 靠提示词和代码审查 | 由 DCE 与 Kubernetes 的 RBAC 拒绝 |
+| 数据 | 同一个进程里混着 | 各自沙箱，快照隔离 |
+| 成本 | 常驻 | 空闲挂起，恢复约 0.3 秒 |
+
+
 
 用户身份 → kgateway → substrate-adapter → kagent → Substrate Actor（DSH + skills）→ DCE / Kubernetes。
 SRE Agent 独立运行，只通过 agentgateway 暴露两个入口。
@@ -74,14 +91,27 @@ docs/                  architecture / replicate / gotchas / security / mock-dce
 
 ---
 
-## 关键取舍（先看这几条，能省你两天）
+## 已经解决过的问题（不需要你再踩）
+
+| 问题 | 结论 |
+|---|---|
+| Actor 起不来：`runsc create … device or resource busy` | 私有 cgroupns 下注入 `-ignore-cgroups`，默认 auto 探测，普通节点自动跳过 |
+| SandboxAgent 拒绝部署 | BYO 必须给 `cmd`（字符串）+ `args`，镜像必须用 digest 固定 |
+| Actor 里 kubectl 没身份 / 模型报 no API key | BYO **不会**传 volumes/volumeMounts，凭据只能走 `env` + `secretKeyRef` |
+| 请求撞上 Actor 休眠就超时 | controller 打了唤醒竞态补丁（`images/controller-fix/`），并给了恢复命令 |
+| 长回复被截断、页面报"连接中断" | 三件事一起修：网关 300s、shim 心跳、SSE 断流自动回落非流式 |
+| Valkey 重置后适配器起不来 | 单节点集群要显式设置 `cluster-announce-ip` / bus-port |
+| 换会话要改环境变量、全员历史失效 | 会话 = hash(用户 + 会话标识)，`SESSION_EPOCH` 已废弃 |
+
+细节在 [docs/gotchas.md](docs/gotchas.md)，按"现象 → 原因 → 已做的处理"组织，不复述排查过程。
+
+## 分发策略
 
 | 决定 | 为什么 |
 |---|---|
-| 图片/二进制进不了 git | `dce` CLI 16MB 且分架构；skills 会漂移。build 脚本按架构下载 + 按 tag 克隆 |
+| 图片/二进制进不了 git | `dce` CLI 16MB 且分架构；skills 会漂移。build 脚本按架构下载 + 按 tag 克隆（离线可预放 build/ 目录） |
 | 镜像只给 Dockerfile | 本机是 macOS/arm64，别人服务器是 amd64。只分发源码 |
 | NetworkPolicy 默认不装 | 很多 CNI 不执行 NetworkPolicy，装了会给人假安全感。要装请配 `WITH_NETWORKPOLICY=true` 并跑 `make netpol-test` 自证 |
-| gVisor `-ignore-cgroups` 默认 auto | 只有 OrbStack 这类"私有 cgroupns"需要；真实 x86 节点一般不需要 |
 | JWT 会写进 Actor 的 `/run/dsh/token` | 为了让 `dce` CLI 以用户身份调用。这是**已知边界**，见 docs/security.md |
 
 ---

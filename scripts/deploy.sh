@@ -14,12 +14,17 @@ export IMAGE_ADAPTER="$(image_ref adapter)"
 export IMAGE_SRE_AGENT="$(image_ref sre-agent)"
 export JWKS_INLINE
 JWKS_INLINE="$(tr -d '\n' < "${JWKS_PATH:-$REPO_ROOT/deploy/jwks/jwks.json}")"
+export WORKER_REPLICAS="${WORKER_REPLICAS:-3}"
 export SNAPSHOT_LOCATION="${SNAPSHOT_LOCATION:-gs://ate-snapshots/${NS_KAGENT}/dsh-sandbox}"
 export SRE_TARGET_CLUSTER="${SRE_TARGET_CLUSTER:-$DCE_CLUSTER}"
 
 # Actor 镜像必须用 digest（BYO 的硬性要求）；从本地 docker 里取，取不到就报错
 dsh_ref="$(image_ref dsh-a2a)"
 digest="$(${DOCKER:-docker} image inspect "$dsh_ref" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)"
+if [ -z "$digest" ] && [ "${DRY_RUN:-0}" = "1" ]; then
+  warn "DRY_RUN：没有 digest，用 tag 渲染（真实部署必须以 digest 固定）"
+  digest="$dsh_ref"
+fi
 [ -n "$digest" ] || die "拿不到 $dsh_ref 的 digest，先 make build 并确认已 push"
 export IMAGE_DSH_A2A_DIGEST="$digest"
 
@@ -31,6 +36,15 @@ render() {
 }
 for f in "$REPO_ROOT"/deploy/manifests/*.yaml; do render "$f"; done
 ok "清单已渲染到 $RENDER"
+
+# DRY_RUN=1：只渲染并 diff，不 apply
+if [ "${DRY_RUN:-0}" = "1" ]; then
+  for f in "$RENDER"/*.yaml; do
+    log "diff $(basename "$f")"
+    "$KUBECTL" diff -f "$f" 2>&1 | head -40 || true
+  done
+  ok "DRY_RUN 完成（未改动集群）"; exit 0
+fi
 
 # ── 应用 ──────────────────────────────────────────────────
 "$KUBECTL" get ns "$NS_APP" >/dev/null 2>&1 || "$KUBECTL" create ns "$NS_APP"

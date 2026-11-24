@@ -1,0 +1,68 @@
+diff --git a/go/core/pkg/sandboxbackend/substrate/actor_reachability.go b/go/core/pkg/sandboxbackend/substrate/actor_reachability.go
+index 024e4ee..08b26ee 100644
+--- a/go/core/pkg/sandboxbackend/substrate/actor_reachability.go
++++ b/go/core/pkg/sandboxbackend/substrate/actor_reachability.go
+@@ -54,6 +54,15 @@ func waitForActorReachableViaAtenet(
+ 
+ 	for {
+ 		actor, getErr := actors.GetActor(waitCtx, atespace, actorID)
++		// A concurrent end-of-turn checkpoint may change RUNNING to SUSPENDED
++		// after EnsureSessionActor checked the initial state. Wake it again.
++		if getErr == nil && actor.GetStatus() == ateapipb.Actor_STATUS_SUSPENDED {
++			if resumer, ok := actors.(interface {
++				ResumeActor(context.Context, string, string) (*ateapipb.Actor, error)
++			}); ok {
++				actor, getErr = resumer.ResumeActor(waitCtx, atespace, actorID)
++			}
++		}
+ 		if getErr == nil && actor.GetStatus() == ateapipb.Actor_STATUS_RUNNING {
+ 			statusCode, probeErr := probeActorViaAtenetRouter(waitCtx, httpClient, probeURL, host)
+ 			if probeErr == nil && statusCode < http.StatusInternalServerError {
+diff --git a/go/core/pkg/sandboxbackend/substrate/actor_reachability_test.go b/go/core/pkg/sandboxbackend/substrate/actor_reachability_test.go
+index 55af8de..5990f4d 100644
+--- a/go/core/pkg/sandboxbackend/substrate/actor_reachability_test.go
++++ b/go/core/pkg/sandboxbackend/substrate/actor_reachability_test.go
+@@ -139,3 +139,19 @@ func TestWaitForActorReachableViaAtenetTimesOut(t *testing.T) {
+ 		t.Fatal("expected timeout error")
+ 	}
+ }
++
++type suspendingThenSuspended struct { calls atomic.Int32; resumes atomic.Int32 }
++func (s *suspendingThenSuspended) GetActor(context.Context, string, string) (*ateapipb.Actor, error) {
++ if s.calls.Add(1) == 1 { return &ateapipb.Actor{Status: ateapipb.Actor_STATUS_SUSPENDING}, nil }
++ return &ateapipb.Actor{Status: ateapipb.Actor_STATUS_SUSPENDED}, nil
++}
++func (s *suspendingThenSuspended) ResumeActor(context.Context, string, string) (*ateapipb.Actor, error) {
++ s.resumes.Add(1); return &ateapipb.Actor{Status: ateapipb.Actor_STATUS_RUNNING}, nil
++}
++func TestReachableResumesAfterConcurrentSuspend(t *testing.T) {
++ srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })); defer srv.Close()
++ actors := &suspendingThenSuspended{}
++ ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second); defer cancel()
++ if err := waitForActorReachableViaAtenet(ctx, actors, srv.Client(), srv.URL, "kagent", "asr-test"); err != nil { t.Fatal(err) }
++ if actors.resumes.Load() != 1 { t.Fatalf("resumes = %d, want 1", actors.resumes.Load()) }
++}
+diff --git a/go/core/pkg/sandboxbackend/substrate/agent_actor.go b/go/core/pkg/sandboxbackend/substrate/agent_actor.go
+index 4c32ce4..2bf52e3 100644
+--- a/go/core/pkg/sandboxbackend/substrate/agent_actor.go
++++ b/go/core/pkg/sandboxbackend/substrate/agent_actor.go
+@@ -83,6 +83,19 @@ func (b *SandboxAgentActorBackend) EnsureSessionActor(ctx context.Context, sa *v
+ 		created = true
+ 	}
+ 
++	// A request can arrive while the previous turn is being checkpointed.
++	// Wait for that transition to finish, then explicitly resume the actor.
++	for actor.GetStatus() == ateapipb.Actor_STATUS_SUSPENDING {
++		select {
++		case <-ctx.Done():
++			return sandboxbackend.EnsureResult{}, ctx.Err()
++		case <-time.After(100 * time.Millisecond):
++		}
++		actor, err = b.client.GetActor(ctx, atespace, actorID)
++		if err != nil {
++			return sandboxbackend.EnsureResult{}, fmt.Errorf("substrate GetActor %q while suspending: %w", actorID, err)
++		}
++	}
+ 	switch actor.GetStatus() {
+ 	case ateapipb.Actor_STATUS_RUNNING, ateapipb.Actor_STATUS_RESUMING:
+ 	case ateapipb.Actor_STATUS_SUSPENDED, ateapipb.Actor_STATUS_UNSPECIFIED,
