@@ -76,16 +76,21 @@ adapter 和 shim 就是这三段之间的两座桥。**它们是本 POC 的实�
 |---|---|---|---|
 | `DCE_ORIGIN` | **你平时登录 DCE 控制台的浏览器地址**（不带末尾 `/`） | 浏览器地址栏 | `http://10.31.223.20:31284` |
 | `DCE_CLUSTER` | DCE 里托管的 K8s 集群名 | DCE 控制台 → 集群管理 → 集群名 | `kpanda-global-cluster` |
-| `EXTENSION_GATEWAY_BASE` | **本仓库自己部署的入口网关**（不是 DCE 的网关），`.env` 里叫 `GATEWAY_*`；`make deploy` 结束会打印实际地址 | 部署后确认 | `http://<gateway-ip>:8080` |
+| `JWT_ISSUER` | DCE 签发 token 的 issuer | 解开一个登录 token 看 `iss`（见下） | `https://<dce>:31909/auth/realms/ghippo` |
+| `JWT_AUDIENCE` | token 的受众 | 同一个 token 看 `aud` | `__internal-ghippo` |
+| `EXTENSION_GATEWAY_BASE` | **本仓库自己部署的入口网关**（不是 DCE 的网关） | `make deploy` 结束会打印 | `http://<gateway-ip>:8080` |
+| `IMAGE_REGISTRY` / `IMAGE_TAG` | 镜像仓库与版本 | 默认已指向发布好的镜像 | `release-ci.daocloud.io/common-ci` / `0.1.0` |
 
-`JWT_ISSUER` / `JWT_AUDIENCE` 不用猜，从登录后的 token 里读：
+`iss` / `aud` 怎么读：在已登录的 DCE 页面按 F12，控制台执行
 
 ```js
-// DCE 页面 → F12 控制台
 copy(localStorage.getItem('ANAKIN_TOKEN'))
 ```
 
-到 https://jwt.io 粘进去，看 payload 的 `iss` 和 `aud`，分别填给 `JWT_ISSUER` / `JWT_AUDIENCE`（本项目默认值就是常见形态，一般不用改）。
+粘到 https://jwt.io 看 payload 里的 `iss` 和 `aud`。
+
+> **这一步只是为了让 `make verify` 能在命令行验证。** 日常使用时浏览器扩展自己会读 `localStorage['ANAKIN_TOKEN']`，
+> 不需要任何人复制 token；JWT 过期后 DCE 也会自动刷新。**生产配置里不应出现任何手工 token。**
 
 ### 1. 前置：集群能拉到镜像
 
@@ -154,7 +159,7 @@ make extension     # 生成 build/extension/，在 chrome://extensions 加载
 TOKEN_FILE=~/token.txt make verify
 ```
 
-`~/token.txt` 就是上面那串 ANAKIN_TOKEN。9 条用例全 PASS 才算装好。
+`~/token.txt` 就是上面 `copy(...)` 得到的那串 token（**仅用于命令行验证**）。9 条用例全 PASS 才算装好。
 
 ## 仓库结构
 
