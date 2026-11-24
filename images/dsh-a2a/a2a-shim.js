@@ -6,7 +6,8 @@ const crypto = require('crypto');
 
 const DSH = process.env.DSH_ENDPOINT || 'http://127.0.0.1:18790';
 const PORT = Number(process.env.A2A_PORT || 80);
-const TURN_TIMEOUT_MS = Number(process.env.TURN_TIMEOUT_MS || 180000);
+// 单轮上限：必须小于网关的 300s，否则先被网关掐断
+const TURN_TIMEOUT_MS = Number(process.env.TURN_TIMEOUT_MS || 240000);
 
 const sessionByContext = new Map(); // contextId -> dsh sessionId
 let sreToken = null; // 只在内存里，绝不落到 prompt 或磁盘
@@ -126,7 +127,10 @@ async function ask(contextId, text, onText) {
     }
     await new Promise((r) => setTimeout(r, 300));
   }
-  throw new Error('turn timeout');
+  const steps = Math.max(0, (events || []).filter((e) => e.type === 'tool/call').length);
+  const err = new Error(`本轮超过 ${Math.round(TURN_TIMEOUT_MS / 1000)} 秒已中止（已完成 ${steps} 步工具调用）`);
+  err.userFacing = true;
+  throw err;
 }
 
 function send(res, code, body) {
