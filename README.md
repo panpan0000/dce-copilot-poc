@@ -70,20 +70,77 @@ adapter 和 shim 就是这三段之间的两座桥。**它们是本 POC 的实�
 
 ## 快速开始
 
-```bash
-cp config.env.example .env      # 改：DCE 地址、镜像仓库、网关地址
-mkdir -p secrets && cp secrets.env.example secrets/.env.secret   # 改：模型 key
-make check                      # 配置/依赖/连通性自检
-make build                      # 3 个镜像（构建期自动取 dce CLI 与 skills）
-make bootstrap                  # 装 Gateway API / kgateway / substrate / kagent
-make deploy                     # 应用侧资源
-make extension                  # 生成扩展 config.js 并打包
-make verify                     # 端到端用例，输出 pass/fail
+### 0. 先弄清三个地址（最容易卡住的地方）
+
+| `.env` 里的变量 | 是什么 | 去哪找 | 长什么样 |
+|---|---|---|---|
+| `DCE_ORIGIN` | **你平时登录 DCE 控制台的浏览器地址**（不带末尾 `/`） | 浏览器地址栏 | `http://10.31.223.20:31284` |
+| `DCE_CLUSTER` | DCE 里托管的 K8s 集群名 | DCE 控制台 → 集群管理 → 集群名 | `kpanda-global-cluster` |
+| `EXTENSION_GATEWAY_BASE` | **本仓库自己部署的入口网关**（不是 DCE 的网关），`.env` 里叫 `GATEWAY_*`；`make deploy` 结束会打印实际地址 | 部署后确认 | `http://<gateway-ip>:8080` |
+
+`JWT_ISSUER` / `JWT_AUDIENCE` 不用猜，从登录后的 token 里读：
+
+```js
+// DCE 页面 → F12 控制台
+copy(localStorage.getItem('ANAKIN_TOKEN'))
 ```
 
-`make verify` 是唯一能证明"装好了"的东西——README 不算。
+到 https://jwt.io 粘进去，看 payload 的 `iss` 和 `aud`，分别填给 `JWT_ISSUER` / `JWT_AUDIENCE`（本项目默认值就是常见形态，一般不用改）。
 
----
+### 1. 配置文件
+
+```bash
+cp config.env.example .env
+$EDITOR .env          # 至少改这 6 项：
+                      # DCE_ORIGIN / DCE_CLUSTER / JWT_ISSUER / JWT_AUDIENCE
+                      # IMAGE_REGISTRY / IMAGE_TAG
+mkdir -p secrets
+cp secrets.env.example secrets/.env.secret
+$EDITOR secrets/.env.secret     # 填 DEEPSEEK_API_KEY
+```
+
+**模型 key 从哪来**：DeepSeek 开放平台（platform.deepseek.com）创建一个 API Key，形如 `sk-xxxx`。
+如果你们用的是内网模型网关，把 `DSH_MODEL_PROVIDER` / `DSH_MODEL` 改成对应值，key 换成网关发的。
+
+**镜像仓库怎么填**：如果只用官方已发布的镜像，`IMAGE_REGISTRY=release-ci.daocloud.io/common-ci`、`IMAGE_TAG=0.1.0`，跳过第 2 步。
+要自己构建，填一个集群能拉到的仓库地址（`make build` 后 `docker push` 会推到它）。
+
+### 2. 自检
+
+```bash
+make check
+```
+
+它会逐项告诉你：哪个配置是空的、哪个还是模板值、DCE 连不连得上、集群有没有默认 StorageClass、CNI 能不能执行 NetworkPolicy。
+**这一步不过就别往下走**。
+
+### 3. 构建镜像（可选）
+
+```bash
+make build
+```
+
+4 个镜像：`dsh-a2a`（Actor 运行时）、`sre-agent`、`adapter`、`controller-fix`。
+前三个会自动取 `dce` CLI（按架构下载）和 skills（按 tag 克隆）；离线环境把二进制放 `build/` 下即可。
+
+### 4. 装基础组件
+
+```bash
+make bootstrap
+```
+
+官方 Helm 顺序：Gateway API CRD → kgateway → substrate → kagent。
+开头会预检 gVisor / 默认 StorageClass / LoadBalancer，缺什么当场报错（这三样装不出来，必须预先准备）。
+
+### 5. 部署应用 + 扩展 + 验证
+
+```bash
+make deploy        # 会打印入口地址，把它填回 EXTENSION_GATEWAY_BASE
+make extension     # 生成 build/extension/，在 chrome://extensions 加载
+TOKEN_FILE=~/token.txt make verify
+```
+
+`~/token.txt` 就是上面那串 ANAKIN_TOKEN。9 条用例全 PASS 才算装好。
 
 ## 仓库结构
 
