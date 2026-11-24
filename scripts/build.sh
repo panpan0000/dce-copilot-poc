@@ -12,7 +12,7 @@ CTX_DSH="$BUILD_DIR/ctx-dsh-a2a"
 mkdir -p "$BUILD_DIR"
 
 need docker
-DOCKER="${DOCKER:-docker}"
+pick_docker
 
 # ── 1) 准备 dsh-a2a 的构建上下文 ─────────────────────────────
 log "准备构建上下文: $CTX_DSH"

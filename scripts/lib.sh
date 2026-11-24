@@ -49,4 +49,14 @@ reject_placeholders() {
 
 need() { command -v "$1" >/dev/null 2>&1 || die "缺少命令: $1"; }
 
+# 优先用 OrbStack 自带的 docker CLI：绕开 Docker Desktop 的授权弹窗
+pick_docker() {
+  if [ -x "$HOME/.orbstack/bin/docker" ]; then
+    DOCKER="$HOME/.orbstack/bin/docker"
+  else
+    DOCKER="docker"
+  fi
+  export DOCKER
+}
+
 image_ref() { printf '%s/%s:%s' "$IMAGE_REGISTRY" "$1" "$IMAGE_TAG"; }

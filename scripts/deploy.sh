@@ -20,7 +20,7 @@ export SRE_TARGET_CLUSTER="${SRE_TARGET_CLUSTER:-$DCE_CLUSTER}"
 
 # Actor 镜像必须用 digest（BYO 的硬性要求）；从本地 docker 里取，取不到就报错
 dsh_ref="$(image_ref dsh-a2a)"
-digest="$(${DOCKER:-docker} image inspect "$dsh_ref" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)"
+digest="$(${DOCKER} image inspect "$dsh_ref" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)"
 if [ -z "$digest" ] && [ "${DRY_RUN:-0}" = "1" ]; then
   warn "DRY_RUN：没有 digest，用 tag 渲染（真实部署必须以 digest 固定）"
   digest="$dsh_ref"
