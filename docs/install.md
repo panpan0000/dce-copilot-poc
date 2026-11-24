@@ -10,7 +10,7 @@
 | **gVisor（runsc）** | Actor 跑在 gVisor 沙箱里，不装就起不来 | 节点预装并在 containerd 注册 RuntimeClass（[官方](https://gvisor.dev/docs/user_guide/install/)），`make bootstrap` 会检查 `runtimeclass/gvisor` |
 | **默认 StorageClass** | substrate 的快照与 Actor 目录要 PVC | k3s 自带 local-path；云上用默认云盘 SC |
 | **LoadBalancer** | `poc-gateway` 要一个外部 IP | 云 LB / MetalLB / k3s 的 svclb 都可以。没有时：`INSTALL_METALLB=true METALLB_POOL=<cidr> make bootstrap` |
-| 可拉取的镜像仓库 | 集群要从它拉自建镜像 | 见第 3 步；镜像已发布在 `release-ci.daocloud.io/common-ci/` |
+| 可拉取的镜像仓库 | 集群要从它拉自建镜像（本项目不提供现成镜像） | 一个你集群能访问的 registry，`IMAGE_REGISTRY` 指向它 |
 | **一个 DCE 环境** | 身份、权限、指标、Notebook 都来自 DCE | 提供 kpanda / insight / baize 接口，并知道 issuer / audience |
 
 ## 2. 配置
@@ -34,20 +34,14 @@ EXTENSION_MATCH_ORIGIN / EXTENSION_GATEWAY_BASE         # 浏览器扩展
 
 ## 3. 镜像
 
-三种选择，任选其一：
+本项目不提供现成镜像，一律从源码构建：
 
 ```bash
-# A. 直接用已发布的（推荐先跑通）
-IMAGE_REGISTRY=release-ci.daocloud.io/common-ci
-IMAGE_TAG=0.1.0
-# 并在 .env 里把名字对齐（dce-copilot-dsh-a2a / dce-copilot-adapter / dce-copilot-sre-agent）
-
-# B. 从源码构建（构建期自动取 dce CLI 与 skills；离线可预放 build/）
-make build
-
-# C. 有自己的仓库
-IMAGE_REGISTRY=your.registry/path && PUSH_IMAGES=true make build
+IMAGE_REGISTRY=<你集群能拉的仓库> IMAGE_TAG=0.1.0 make build
 ```
+
+默认构建 `linux/amd64`（服务器多为 x86）。Apple Silicon 本机试跑改 `TARGET_PLATFORM=linux/arm64`。
+构建期会自动取 `dce` CLI 与 skills；离线环境把它们放到 `build/` 下。
 
 ## 4. 安装基础组件
 

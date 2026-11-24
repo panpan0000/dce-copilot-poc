@@ -63,11 +63,17 @@ done
 ok "skills: $(ls "$CTX_DSH/skills" | tr '\n' ' ')"
 
 # ── 2) 构建 ────────────────────────────────────────────────
+TARGET_PLATFORM="${TARGET_PLATFORM:-linux/amd64}"
 build() {
   local name="$1" ctx="$2"; shift 2
   local ref; ref="$(image_ref "$name")"
-  log "构建 $ref"
-  "$DOCKER" build -t "$ref" "$@" "$ctx"
+  log "构建 $ref（platform=$TARGET_PLATFORM）"
+  if [ "${PUSH_IMAGES:-false}" = "true" ]; then
+    # 交叉构建 + 直接推送（arm64 主机上构建 amd64 需要 buildx + QEMU）
+    "$DOCKER" buildx build --platform "$TARGET_PLATFORM" --push -t "$ref" "$@" "$ctx" >/dev/null
+  else
+    "$DOCKER" buildx build --platform "$TARGET_PLATFORM" --load -t "$ref" "$@" "$ctx" >/dev/null
+  fi
   ok "$ref"
 }
 

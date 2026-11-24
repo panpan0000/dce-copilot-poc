@@ -79,7 +79,7 @@ adapter 和 shim 就是这三段之间的两座桥。**它们是本 POC 的实�
 | `JWT_ISSUER` | DCE 签发 token 的 issuer | 解开一个登录 token 看 `iss`（见下） | `https://<dce>:31909/auth/realms/ghippo` |
 | `JWT_AUDIENCE` | token 的受众 | 同一个 token 看 `aud` | `__internal-ghippo` |
 | `EXTENSION_GATEWAY_BASE` | **本仓库自己部署的入口网关**（不是 DCE 的网关） | `make deploy` 结束会打印 | `http://<gateway-ip>:8080` |
-| `IMAGE_REGISTRY` / `IMAGE_TAG` | 镜像仓库与版本 | 默认已指向发布好的镜像 | `release-ci.daocloud.io/common-ci` / `0.1.0` |
+| `IMAGE_REGISTRY` / `IMAGE_TAG` | 你要构建并推送到的仓库 | 你自己填（集群能拉到的地址） | `registry.example.com/dce-copilot` / `0.1.0` |
 
 `iss` / `aud` 怎么读：在已登录的 DCE 页面按 F12，控制台执行
 
@@ -92,30 +92,7 @@ copy(localStorage.getItem('ANAKIN_TOKEN'))
 > **这一步只是为了让 `make verify` 能在命令行验证。** 日常使用时浏览器扩展自己会读 `localStorage['ANAKIN_TOKEN']`，
 > 不需要任何人复制 token；JWT 过期后 DCE 也会自动刷新。**生产配置里不应出现任何手工 token。**
 
-### 1. 前置：集群能拉到镜像
-
-默认直接使用已发布的镜像，集群必须能访问并拉取：
-
-```
-release-ci.daocloud.io/common-ci/dce-copilot-dsh-a2a:0.1.0
-release-ci.daocloud.io/common-ci/dce-copilot-adapter:0.1.0
-release-ci.daocloud.io/common-ci/dce-copilot-sre-agent:0.1.0
-```
-
-先验证一句（在集群里能跑一个 Pod）：
-
-```bash
-kubectl run pulltest --image=release-ci.daocloud.io/common-ci/dce-copilot-adapter:0.1.0 \
-  --restart=Never --command -- sleep 5 && kubectl get pod pulltest
-```
-
-- 拉得到 → 继续，**不需要 `make build`**
-- 拉不到（网络不通 / 需要认证）→ 三选一：
-  1. 配 `imagePullSecrets` 后继续用已发布镜像
-  2. 用 `docker pull` 再 `docker tag` + 推到你自己集群能拉的仓库，改 `IMAGE_REGISTRY`
-  3. 从源码构建（见文末「自己构建镜像」）
-
-### 2. 配置文件
+### 1. 配置文件
 
 ```bash
 cp config.env.example .env
@@ -130,10 +107,12 @@ $EDITOR secrets/.env.secret     # 填 DEEPSEEK_API_KEY
 **模型 key 从哪来**：DeepSeek 开放平台（platform.deepseek.com）创建一个 API Key，形如 `sk-xxxx`。
 如果你们用的是内网模型网关，把 `DSH_MODEL_PROVIDER` / `DSH_MODEL` 改成对应值，key 换成网关发的。
 
-**镜像仓库怎么填**：如果只用官方已发布的镜像，`IMAGE_REGISTRY=release-ci.daocloud.io/common-ci`、`IMAGE_TAG=0.1.0`，跳过第 2 步。
-要自己构建，填一个集群能拉到的仓库地址（`make build` 后 `docker push` 会推到它）。
+**镜像仓库怎么填**：`IMAGE_REGISTRY` 必须填一个**你的集群能拉到**的仓库，`IMAGE_TAG` 随便起个版本号。
+本项目**不提供现成镜像**，所有人都要从源码构建自己的一份。
 
-### 3. 自检
+**架构**：默认 `TARGET_PLATFORM=linux/amd64`（服务器基本都是 x86）。在 Apple Silicon 上本机试跑时改成 `linux/arm64`。
+
+### 2. 自检
 
 ```bash
 make check
@@ -247,29 +226,18 @@ TOKEN_FILE=~/token.txt make verify  # token 从浏览器 localStorage['ANAKIN_TO
 
 细节在 [docs/gotchas.md](docs/gotchas.md)，按"现象 → 原因 → 已做的处理"组织，不复述排查过程。
 
-## 镜像在哪
+## 镜像
 
-公开（公司内网 registry）：
+本项目**不提供现成镜像**，构建方式见快速开始第 3 步。四个镜像：
 
-```
-release-ci.daocloud.io/common-ci/dce-copilot-dsh-a2a:0.1.0      # Actor 运行时（DSH + shim + dce CLI + skills）
-release-ci.daocloud.io/common-ci/dce-copilot-adapter:0.1.0      # substrate-adapter
-release-ci.daocloud.io/common-ci/dce-copilot-sre-agent:0.1.0    # 独立 SRE Agent
-```
+| 镜像 | 内容 |
+|---|---|
+| `dsh-a2a` | Actor 运行时：DSH + A2A shim + `dce` CLI + skills |
+| `sre-agent` | 独立 SRE Agent |
+| `adapter` | 身份→会话、SSE 流式、DCE kubeconfig |
+| `controller-fix` | kagent controller + 唤醒竞态补丁（先跑 `images/controller-fix/build-controller.sh`） |
 
-本仓库只放 Dockerfile 与源码，**不放镜像**；`make build` 会从源码重建，`IMAGE_REGISTRY` 指向上面的地址即可直接复用。
-
-### controller 的存档
-kagent controller 的唤醒竞态补丁没有发布镜像（基于上游 beta6，带 10 行改动），仓库里留的是**可重建的存档**：
-
-```
-images/controller-fix/
-├── Dockerfile                      # 把编译产物盖到官方 beta6 镜像上
-├── build-controller.sh             # 从 kagent 源码 + 补丁构建（需 Go 1.26.3 + 官方 ldflags）
-├── UPSTREAM-ISSUE.md               # 问题记录
-└── poc-overrides.yaml
-kagent-resume-race.patch            # 补丁本体
-```
+默认构建 `linux/amd64`；`TARGET_PLATFORM` 可改。本机是 Apple Silicon 但目标集群是 x86 时**必须**保持 amd64，否则镜像在节点上起不来。
 
 ## 上游状态：beta6 与 main
 
