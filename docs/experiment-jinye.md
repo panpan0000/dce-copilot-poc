@@ -155,3 +155,33 @@ hi                                        ← runsc 本机 0.3s 级完成
 1. 让 worker 能匿名拉到 Actor 镜像（推到 jinye 可匿名拉取的 registry，或配 worker 侧凭证）
 2. 或确认 worker 镜像缓存路径（是否还需要挂另一个 hostPath）并预置镜像
 3. 定位 worker 卡点的最直接手段：给 ateom 打开 debug 日志 / 抓它打开的 socket
+
+
+## 2026-11-25 21:57 重大突破（沙箱终于起来了）
+
+### 三个真正的根因（按发现顺序）
+1. **worker 容量**：WorkerPool 没设 `template.resources.limits.memory` → 容量 0 → "no free workers"
+2. **gVisor 资产下载**：SandboxConfig `gvisor-default` 的 runsc 资产 URL 是
+   `gs://gvisor/releases/release/20260622/x86_64/runsc`（GCS，匿名拉取）。
+   jinye 出不了网 → atelet 拉 runsc 失败 → restore 永远超时。
+   修复：把**完全一致**的 runsc（sha256=f18a948b…）上传到集群内 rustfs(S3)，
+   把 URL 改成 `s3://ate-snapshots/gvisor/runsc`。
+   关键坑：asset URL 只认 `gs://`/`s3://`，**不认 `http://`**（会被当成 bucket 名）。
+3. **就绪探针**：kagent 硬编码 golden snapshot 的 wakeup probe = `GET :8081/readyz`。
+   我们的 shim 只在 80 端口服务 /healthz，缺 8081/readyz → golden 永远不就绪。
+   修复：a2a-shim.js 加一个 8081 的 readiness 监听。
+
+### 结果
+- runsc 沙箱**真实启动**（`runsc-gofer` + `runsc-sandbox` 跑起来，boot 了 pause + kagent 两个容器）
+- ActorTemplate 一度达到 **Ready**
+- `/poc/chat` 能穿透 网关→adapter→controller→actor，actor 收到 turn 后尝试调 DSH
+
+### 仍未打通（最后一段）
+- golden snapshot 有时能 Ready，但多次重试后 worker 被"未完成的 golden build"占住，
+  新请求回到 "no free workers"。疑似 **runsc checkpoint（挂起快照）** 在 jinye 内核
+  （5.15.0-143-generic）上失败或卡住，导致 golden 不终结、worker 不释放。
+
+### 待办（给下一个人）
+1. 观察 golden build 的 runsc checkpoint 是否报错（内核/权限）
+2. 单 worker 会饿死：先把 WorkerPool replicas 提到 3，缓解"golden 占用饿死 chat"
+3. 确认 actor 内 DSH 能真正连到 api.deepseek.com（沙箱 egress 白名单）

@@ -242,3 +242,12 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => log('a2a shim listening on', PORT, '-> dsh', DSH));
+
+// substrate/kagent 的 golden snapshot 用 GET :8081/readyz 判断 Actor 是否就绪。
+// 我们 A2A 跑在 80，这里补一个就绪探针端口，否则 golden snapshot 永远等不到就绪。
+const ready = require('http').createServer((req, res) => {
+  res.writeHead(200, { 'content-type': 'text/plain' });
+  res.end('ok\n');
+});
+ready.listen(8081, '0.0.0.0', () => log('readiness probe on 8081 (/readyz)'));
+
