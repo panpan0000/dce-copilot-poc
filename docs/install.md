@@ -94,3 +94,16 @@ TOKEN_FILE=~/token.txt make verify
 | SandboxAgent 拒绝创建 | Actor 镜像用了 tag 而非 digest |
 | 网关 401 | issuer / audience 与 DCE 不一致，或 JWKS 里没有对应 kid |
 | Actor 创建失败 | 见 [gotchas.md](gotchas.md) 第 1 条 |
+
+
+### 忘了入口地址怎么办
+
+`make install-agent` 结束时会打印入口地址，终端关掉也没关系，随时再查：
+
+```bash
+make url
+# 等价于
+kubectl -n watsons-agent-poc get svc poc-gateway -o wide
+```
+
+NodePort 模式输出形如 `172.30.40.186:31853`；LoadBalancer 模式输出 `IP:8080`。

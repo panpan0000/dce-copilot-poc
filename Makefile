@@ -28,6 +28,9 @@ install-agent: ## 部署 Agent（adapter / Gateway / SandboxAgent / SRE）
 extension: ## 生成扩展的 config.js 并打包
 	@scripts/extension.sh
 
+url: ## 打印入口地址（部署日志关掉后可再查）
+	@scripts/url.sh
+
 verify: ## 跑一遍端到端用例，输出 pass/fail
 	@scripts/verify.sh
 

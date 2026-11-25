@@ -92,4 +92,15 @@ case "${GATEWAY_MODE}" in
     echo "  http://${node}:${port}/sandbox" ;;
   *) echo "  ingress 模式请自行配置 host，EXTENSION_GATEWAY_BASE=${EXTENSION_GATEWAY_BASE}" ;;
 esac
-ok "部署完成，下一步: make extension && make verify"
+cat <<TIP
+
+  忘了这个地址？随时再查：
+    make url
+  或者：
+    kubectl -n $NS_APP get svc poc-gateway -o wide
+
+  扩展配置：DCE 地址填控制台域名，网关地址填上面打印的 http://<host>:<port>
+  下一步：make extension && make verify
+
+TIP
+ok "部署完成"

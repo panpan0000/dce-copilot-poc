@@ -16,7 +16,7 @@ function ensureConfig() {
   return configReady;
 }
 
-const DCE_USER_URL = `${DCE_ORIGIN}/apis/ghippo.io/v1alpha1/current-user`;
+const dceUserUrl = () => `${DCE_ORIGIN}/apis/ghippo.io/v1alpha1/current-user`;
 
 // DCE API 端点（已按 docs.daocloud.io/openapi 的 kpanda / insight / baize 规格核对）。
 const DCE_API = Object.freeze({
@@ -124,7 +124,7 @@ async function readDceToken(tabId) {
 async function currentUser(token) {
   let response;
   try {
-    response = await fetch(DCE_USER_URL, {
+    response = await fetch(dceUserUrl(), {
       method: 'GET',
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
       credentials: 'omit',
