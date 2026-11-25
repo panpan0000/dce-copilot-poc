@@ -114,3 +114,21 @@ total 8   ← 空目录（只有 . 和 ..）
 1. 从 ateom 镜像里取出 runsc 布局（`crictl inspecti` / 导出镜像），按 `runsc-<hash>` 命名放入 static-files
 2. 或让 substrate chart 的初始化 Job 跑起来（它本该负责填充这个目录）
 3. 之后重跑 `ResumeGoldenActor`
+
+
+## 2026-11-25 18:55 关键突破：no free workers 的根因
+
+**worker 的可用容量由 Pod 的 `resources.limits.memory` 推算**（substrate 源码
+`internal/ateworker/register/register.go:FromFiles`）。WorkerPool 没设 resources 时容量为 0，
+于是 `ResumeActor → AssignWorker: no free workers available`。
+
+修复：
+
+```yaml
+spec.template.resources:
+  limits:   {cpu: "4", memory: 8Gi}
+  requests: {cpu: 500m, memory: 1Gi}
+```
+
+修复后 AssignWorker 立刻成功，卡点前移到 **CallAteletRestore**（30s DeadlineExceeded）：
+atelet 收到 `AteomHerder/Run`，但 worker 侧创建/恢复沙箱超过 30s 超时。
