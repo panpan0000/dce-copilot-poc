@@ -91,3 +91,26 @@ ssh root@172.30.40.186 'cp /etc/containerd/config.toml.bak-dcecopilot /etc/conta
 1. 给 worker 配镜像源，或把 Actor 镜像推到 jinye 可达的 registry（内网 Harbor）
 2. 或者把 `ateom` 的镜像拉取改成 `IfNotPresent`/本地导入方式
 3. SRE 网关崩溃日志
+
+## 2026-11-25 18:35 根因定位：worker 的 gVisor static-files 是空的
+
+```
+$ ssh 186 'ls -la /var/lib/ateom-gvisor/static-files'
+total 8   ← 空目录（只有 . 和 ..）
+
+对比 OrbStack（同一套 chart）：
+/var/lib/ateom-gvisor/static-files/runsc-62ee…40c0   (1.4MB, wrapper)
+/var/lib/ateom-gvisor/static-files/runsc-62ee…40c0.real (120MB)
+```
+
+**worker（ateom）创建 sandbox 时要从 static-files 里取 runsc，目录为空 → 创建失败 →
+`ResumeGoldenActor` 一直 DeadlineExceeded → Actor 建不出来 → `/poc/chat` 报
+`Post http://dsh-sandbox.kagent:8080 ...` 失败。**
+
+这一条也解释了为什么之前所有尝试（镜像推送、registry 认证、worker 重建）都没用——
+根因不在镜像，在 worker 的运行时文件缺失。
+
+### 下一步（明确）
+1. 从 ateom 镜像里取出 runsc 布局（`crictl inspecti` / 导出镜像），按 `runsc-<hash>` 命名放入 static-files
+2. 或让 substrate chart 的初始化 Job 跑起来（它本该负责填充这个目录）
+3. 之后重跑 `ResumeGoldenActor`
