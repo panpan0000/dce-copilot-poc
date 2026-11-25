@@ -6,6 +6,7 @@ load_env
 require_vars IMAGE_REGISTRY IMAGE_TAG NS_APP NS_KAGENT JWT_ISSUER JWT_AUDIENCE DCE_ORIGIN DCE_CLUSTER
 
 KUBECTL="${KUBECTL:-kubectl}"
+pick_docker
 RENDER="$REPO_ROOT/build/render"
 rm -rf "$RENDER"; mkdir -p "$RENDER"
 
@@ -21,6 +22,10 @@ export SRE_TARGET_CLUSTER="${SRE_TARGET_CLUSTER:-$DCE_CLUSTER}"
 # Actor 镜像必须用 digest（BYO 的硬性要求）；从本地 docker 里取，取不到就报错
 dsh_ref="$(image_ref dsh-a2a)"
 digest="$(${DOCKER} image inspect "$dsh_ref" --format '{{index .RepoDigests 0}}' 2>/dev/null || true)"
+# 离线环境：镜像已 nerdctl load 到节点，没有 RepoDigest，用 tag 直接部署
+if [ "${SKIP_DIGEST_CHECK:-0}" = "1" ]; then
+  digest="$dsh_ref"
+fi
 if [ -z "$digest" ] && [ "${DRY_RUN:-0}" = "1" ]; then
   warn "DRY_RUN：没有 digest，用 tag 渲染（真实部署必须以 digest 固定）"
   digest="$dsh_ref"

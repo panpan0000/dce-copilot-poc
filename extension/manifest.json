@@ -16,6 +16,9 @@
   "content_scripts": [
     {
       "matches": [
+        "https://demo-tf-alpha.daocloud.cn/*",
+        "http://localhost/*",
+        "http://127.0.0.1/*",
         "http://10.31.223.20:31284/*"
       ],
       "js": [

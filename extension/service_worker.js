@@ -66,8 +66,16 @@ function getPageOrigin(sender) {
     throw new Error('页面来源无效');
   }
 
-  if (origin !== DCE_ORIGIN) {
-    throw new Error('页面来源不是允许的 DCE 地址');
+  // 允许两个来源：配置的 DCE 地址（options/config.js），或已配置网关所在的页面。
+  // 真正的安全边界在网关与 adapter（都校验 JWT），这里只防"任意站点借用扩展"。
+  // 没配置过（还是模板占位值）时，直接采用当前页面来源，避免装完必须先去填选项
+  if (!DCE_ORIGIN || DCE_ORIGIN.includes('example.com')) {
+    DCE_ORIGIN = origin;
+    CFG.dceOrigin = origin;
+  }
+  const allowed = new Set([DCE_ORIGIN, CFG.extensionOrigin].filter(Boolean));
+  if (!allowed.has(origin)) {
+    throw new Error(`页面来源不是允许的 DCE 地址（当前 ${origin}，已配置 ${[...allowed].join(', ') || '无'}，请在扩展选项里填写）`);
   }
 
   // Chrome provides sender.origin for content-script messages in current

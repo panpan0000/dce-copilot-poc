@@ -68,3 +68,26 @@ ssh root@172.30.40.186 'cp /etc/containerd/config.toml.bak-dcecopilot /etc/conta
 - 涉及多步、跨分钟的活：**要么一条命令串完（nohup + 落日志），要么先 `create_goal`**，不要靠"我待会儿继续"。
 - 回合结束前，必须确认：后台任务在跑且有日志路径、或 goal 处于 active、或有 schedule 提醒。
 - 任何"我会在 X 分钟后报告"的承诺，只有在存在 goal/schedule/后台链式任务时才允许说。
+
+## 2026-11-25 18:20 现状（jinye + demo-tf）
+
+### 已通
+- `make install-dependency`：Gateway API / kgateway / substrate / kagent 全部装上
+- 修掉的坑：kgateway CRD 已被别的 release 占用（跳过 CRD 只装运行时）；`local-path-provisioner` 镜像缺失；
+  静态 PV 绑定 PVC（WaitForFirstConsumer 死锁）；valkey 单节点 0 槽位；`ateom-gvisor:0.0.8` 应为 `v0.0.8`；
+  kagent controller 在 `valueFrom.secretKeyRef` / 空 `value` 的 env 上 panic
+- **身份链路通**：`curl -H "Authorization: Bearer <alice>" http://172.30.40.186:31853/sandbox/poc/whoami` → 200 `{"username":"alice"}`
+- 浏览器面板可显示（扩展 `matches` 需含 demo-tf；SW 的 origin 白名单已放宽/自动采用页面来源）
+
+### 未通
+- 对话：`/poc/chat` 返回 `failed to send HTTP request: Post http://dsh-sandbox.kagent...`
+  根因：Actor 没被创建出来 —— `ActorTemplate` 卡在 `ResumeGoldenActor`，ate-controller 报
+  `while resuming golden actor: DeadlineExceeded`
+- 怀疑：worker（ateom）在创建 sandbox 时需要从 `release-ci.daocloud.io` 拉 Actor 镜像，
+  而 jinye 出网拉不到该 registry；`nerdctl load` 只进了节点 containerd，worker 有自己的内容存储
+- SRE 网关：镜像可拉，但容器启动即崩（待查）
+
+### 下一步
+1. 给 worker 配镜像源，或把 Actor 镜像推到 jinye 可达的 registry（内网 Harbor）
+2. 或者把 `ateom` 的镜像拉取改成 `IfNotPresent`/本地导入方式
+3. SRE 网关崩溃日志
