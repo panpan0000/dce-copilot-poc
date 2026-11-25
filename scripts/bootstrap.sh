@@ -6,6 +6,7 @@ load_env
 require_vars KGATEWAY_VERSION SUBSTRATE_VERSION KAGENT_VERSION NS_KAGENT
 
 need helm; need kubectl; need envsubst
+KUBECTL="${KUBECTL:-kubectl}"
 
 # 渲染 values 模板
 export NS_SUBSTRATE NS_KAGENT WORKER_REPLICAS="${WORKER_REPLICAS:-3}" SUBSTRATE_VERSION STORAGE_CLASS
@@ -54,10 +55,21 @@ kubectl get crd gateways.gateway.networking.k8s.io >/dev/null 2>&1 || \
   kubectl apply -f https://github.com/kubernetes-sigs/gateway-api/releases/download/v1.5.1/standard-install.yaml
 
 log "2/5 kgateway $KGATEWAY_VERSION"
-helm upgrade --install kgateway-crds oci://cr.kgateway.dev/kgateway-dev/charts/kgateway-crds \
-  --version "$KGATEWAY_VERSION" -n "$NS_GATEWAY" --create-namespace --wait
+# 集群里可能已有另一套 kgateway（CRD 被别的 release 认领）。
+# 这种情况下跳过 CRD 安装，只装/升级运行时，避免 ownership 冲突。
+if helm status kgateway-crds -n "$NS_GATEWAY" >/dev/null 2>&1; then
+  ok "kgateway-crds 已存在，跳过"
+else
+  if "$KUBECTL" get crd backendconfigpolicies.gateway.kgateway.dev >/dev/null 2>&1; then
+    warn "集群已有 kgateway CRD（由其他 release 管理），跳过 CRD 安装"
+  else
+    helm upgrade --install kgateway-crds oci://cr.kgateway.dev/kgateway-dev/charts/kgateway-crds \
+      --version "$KGATEWAY_VERSION" -n "$NS_GATEWAY" --create-namespace --wait
+  fi
+fi
+kubectl get ns "$NS_GATEWAY" >/dev/null 2>&1 || kubectl create ns "$NS_GATEWAY"
 helm upgrade --install kgateway oci://cr.kgateway.dev/kgateway-dev/charts/kgateway \
-  --version "$KGATEWAY_VERSION" -n "$NS_GATEWAY" --wait
+  --version "$KGATEWAY_VERSION" -n "$NS_GATEWAY" --create-namespace --wait
 
 log "3/5 substrate $SUBSTRATE_VERSION"
 helm upgrade --install substrate-crds oci://ghcr.io/kagent-dev/substrate/helm/substrate-crds \

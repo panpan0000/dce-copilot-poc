@@ -13,6 +13,9 @@ check: ## 校验配置项与依赖命令
 build: ## 构建 4 个镜像（dsh-a2a / sre-agent / adapter / controller-fix）
 	@scripts/build.sh
 
+fetch-images: ## 集群不能出网时，从能出网的机器搬镜像（NODE=root@host make fetch-images）
+	@NODE=$${NODE:?用法: NODE=root@host make fetch-images} scripts/fetch-images.sh --from-charts
+
 bootstrap: ## 安装基础组件（Gateway API + kgateway + substrate + kagent）
 	@scripts/bootstrap.sh
 

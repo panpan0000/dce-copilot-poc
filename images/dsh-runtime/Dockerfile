@@ -5,12 +5,16 @@ ARG DSH_VERSION=0.1.1-rc.2
 ARG KUBECTL_VERSION=v1.32.9
 
 ENV DEBIAN_FRONTEND=noninteractive HOME=/home/agent
+# npm 镜像：默认用国内源，国内构建快很多；需要官方源时 --build-arg NPM_REGISTRY=https://registry.npmjs.org
+ARG NPM_REGISTRY=https://registry.npmmirror.com
 RUN apt-get update && apt-get install -y --no-install-recommends \
       ca-certificates curl git python3 python3-venv jq tini \
  && rm -rf /var/lib/apt/lists/* \
  && curl -fsSL "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/$(dpkg --print-architecture)/kubectl" \
       -o /usr/local/bin/kubectl && chmod 0755 /usr/local/bin/kubectl \
+ && npm config set registry "${NPM_REGISTRY}" \
  && npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" \
+ && npm config delete registry \
  && npm cache clean --force
 
 # 与旧镜像保持同样的用户与目录，Actor 里的脚本不用改
