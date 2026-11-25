@@ -132,3 +132,26 @@ spec.template.resources:
 
 修复后 AssignWorker 立刻成功，卡点前移到 **CallAteletRestore**（30s DeadlineExceeded）：
 atelet 收到 `AteomHerder/Run`，但 worker 侧创建/恢复沙箱超过 30s 超时。
+
+
+## 2026-11-25 19:20 修正一个错误假设（重要）
+
+我之前猜"30s 不够是因为要下 670MB 镜像"，**证据不支持**：
+
+```
+$ ssh 186 'ps aux | grep -E "ateom|runsc"'
+/ko-app/ateom-gvisor --pod-uid=0bbf...   Ssl   ← 两个 worker 进程活着
+（没有任何 runsc 子进程）
+
+$ /usr/local/bin/runsc --root=/tmp/rs1 do echo hi
+hi                                        ← runsc 本机 0.3s 级完成
+```
+
+**runsc 从未被启动**。worker 在"调用 runsc 之前"就卡住了，30s 是它上一个环节的等待，
+不是沙箱启动慢。最可能卡在 worker 自己的镜像获取（internal/imagecache）——worker 用
+独立的 registry 客户端，不读节点 containerd 的认证，也没有 kubelet 的 imagePullSecret。
+
+### 因此正确的下一步
+1. 让 worker 能匿名拉到 Actor 镜像（推到 jinye 可匿名拉取的 registry，或配 worker 侧凭证）
+2. 或确认 worker 镜像缓存路径（是否还需要挂另一个 hostPath）并预置镜像
+3. 定位 worker 卡点的最直接手段：给 ateom 打开 debug 日志 / 抓它打开的 socket
