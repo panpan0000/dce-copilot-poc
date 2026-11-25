@@ -15,7 +15,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
  && npm config set registry "${NPM_REGISTRY}" \
  && npm install -g "@deepseek-ai/dsh@${DSH_VERSION}" \
  && npm config delete registry \
- && npm cache clean --force
+ && npm cache clean --force \
+ && for f in /usr/local/lib/node_modules/@deepseek-ai/dsh/lib/profile-boot-*.js; do \
+      sed -i 's/await watchUserPatches(ctx,/await (async () => {}) (ctx,/' "$f"; \
+    done
 
 # 与旧镜像保持同样的用户与目录，Actor 里的脚本不用改
 RUN useradd -m -u 10001 -s /bin/bash agent \

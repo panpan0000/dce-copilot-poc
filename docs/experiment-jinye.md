@@ -185,3 +185,30 @@ hi                                        ← runsc 本机 0.3s 级完成
 1. 观察 golden build 的 runsc checkpoint 是否报错（内核/权限）
 2. 单 worker 会饿死：先把 WorkerPool replicas 提到 3，缓解"golden 占用饿死 chat"
 3. 确认 actor 内 DSH 能真正连到 api.deepseek.com（沙箱 egress 白名单）
+
+
+## 2026-11-25 23:05 全链路 99% 打通（剩余：沙箱出网）
+
+### 本轮修好的关键 bug（Pro 接手后）
+1. **dsh 0.1.1-rc.2 npm 构建与"能跑通"的 watsons-dsh-poc:v3 不一致**：
+   - `profile-boot` 里的 `watchUserPatches` 需要 Cordis HMR（生产构建应为 no-op）
+   - cordis 插件版本漂移（loader 1.1.0 / hmr 1.1.0 / timer 1.2.0 vs v12 的 1.0.2/1.0.16/1.1.3）导致 agent-preset 挂载失败
+   - 修复：直接复用 v12 的 dsh 代码树（@deepseek-ai/dsh），仅把 6 个 arm64 原生包换成 npm 树里的 x64 版本
+   - 新 runtime 镜像 `dsh-runtime:0.1.1`（amd64）验证：session.create + prompt 均 ok
+2. **凭据**：DSH_CREDENTIALS_B64 需含新版格式（version:1 + refs:）；同时补 DEEPSEEK_API_KEY 字面 env
+3. **substrate DNS 出网**：dns-controller 生成的 Corefile 只有内部 zone，无外部 forward；
+   且它找 kube-system 的 `kube-dns` ConfigMap（jinye 用 CoreDNS，没有）→ REFUSED
+   - 修复：建 `kube-dns` ConfigMap + 给 substrate coredns 加 `.:53 { forward . 10.233.0.3 }`
+   - 现在 api.deepseek.com 能解析（真实 IP）
+
+### 唯一剩余：沙箱出网（TRANSPORT）
+- `/poc/chat` 已能穿透 网关→adapter→controller→actor→dsh→session.create→模型调用
+- 模型调用报 `DeepSeek API request ... failed (TRANSPORT)`
+- substrate 0.0.8 的 ActorTemplate spec **没有 egress/network/domain 字段**，
+  说明 kagent 的 `sandbox.network.allowedDomains` 在 0.0.8 不生效，沙箱出网要么走 router 的 CONNECT 代理
+- 待查：沙箱 OCI 网络的默认路由/resolv.conf，以及 atenet-router 的 egress 是否放行
+
+### 下一步
+1. 看沙箱 config.json 的 nameservers/routes，确认外部域名该解析到 router IP 还是真实 IP
+2. 若是 router IP：coredns `template IN A .` 映射到 10.233.25.107（CNAME 链要用 fallthrough 处理）
+3. 确认 atenet-router 的 CONNECT egress 放行 api.deepseek.com
