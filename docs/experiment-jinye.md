@@ -43,3 +43,12 @@ kubectl --kubeconfig <jinye> taint node controller-node-1 demo=reserved:NoSchedu
 # 恢复 containerd 配置（186）
 ssh root@172.30.40.186 'cp /etc/containerd/config.toml.bak-dcecopilot /etc/containerd/config.toml && systemctl restart containerd'
 ```
+
+---
+
+## 工作约定（长期有效）
+
+- **长任务（预计 >10 分钟）必须每 15–20 分钟主动报一次进度**，不要等人问。
+- 报告内容：当前阶段 / 已完成项 / 卡点 / 下一步，四行以内。
+- 镜像搬运策略：优先节点侧国内镜像源（`ghcr.nju.edu.cn` 已验证可用）+ `nerdctl tag` 回原名；失败才回退到"本机 pull → save → scp → load"。
+- `make install` = `install-dependency` + `install-agent`。

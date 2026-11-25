@@ -33,10 +33,27 @@ echo "$IMAGES" | sed 's/^/  /'
 COUNT=$(echo "$IMAGES" | wc -l | tr -d ' ')
 log "共 $COUNT 个镜像，开始搬运到 $NODE"
 
+# 优先在节点上用国内镜像源拉取 + retag（不搬 tar）；失败再回退到本机搬运。
+GHCR_MIRROR="${GHCR_MIRROR:-ghcr.nju.edu.cn}"
 i=0
 for img in $IMAGES; do
   i=$((i+1))
   case "$img" in *:*) ;; *) img="$img:latest";; esac
+  # ⓪ 节点上已有就跳过
+  if ssh -o ConnectTimeout=10 "$NODE" "nerdctl --namespace $NS_CONTAINERD images --format '{{.Repository}}:{{.Tag}}' | grep -qx '${img}'"; then
+    ok "[$i/$COUNT] ${img}（已存在）"; continue
+  fi
+
+  # ① 节点侧镜像源
+  case "$img" in
+    ghcr.io/*)
+      mimg="$GHCR_MIRROR/${img#ghcr.io/}"
+      if ssh -o ConnectTimeout=10 "$NODE" "nerdctl --namespace $NS_CONTAINERD pull '$mimg' >/dev/null 2>&1 && nerdctl --namespace $NS_CONTAINERD tag '$mimg' '$img'"; then
+        ok "[$i/$COUNT] ${img}（mirror）"; continue
+      fi ;;
+  esac
+
+  # ② 回退：本机拉取后搬运
   tar="$WORK/$(echo "$img" | tr '/:' '__').tar"
   log "[$i/$COUNT] pull $img"
   "$DOCKER" pull --platform "$PLATFORM" "$img" >/dev/null || { warn "拉取失败，跳过: $img"; continue; }
@@ -46,4 +63,4 @@ for img in $IMAGES; do
   rm -f "$tar"
   ok "[$i/$COUNT] $img"
 done
-ok "全部完成：$COUNT 个镜像已进入 $NODE 的 containerd（namespace=$NS_CONTAINERD）"
+ok "全部完成：$COUNT 个镜像已进入 $NODE 的 containerd（namespace=${NS_CONTAINERD}）"
