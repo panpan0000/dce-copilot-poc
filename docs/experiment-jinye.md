@@ -212,3 +212,24 @@ hi                                        ← runsc 本机 0.3s 级完成
 1. 看沙箱 config.json 的 nameservers/routes，确认外部域名该解析到 router IP 还是真实 IP
 2. 若是 router IP：coredns `template IN A .` 映射到 10.233.25.107（CNAME 链要用 fallthrough 处理）
 3. 确认 atenet-router 的 CONNECT egress 放行 api.deepseek.com
+
+
+## 2026-11-25 23:15 ✅ 全链路打通
+
+`/poc/chat` 返回真实模型回答：
+```
+{"answer":"我是 DeepSeek Harness 驱动的编码智能体，运行在 deepseek-v4-flash 模型上。..."}
+```
+
+### 最后一公里的根因（沙箱出网）
+substrate 0.0.8 的 ActorTemplate spec **没有 egress 字段**，沙箱出网统一走 atenet-router（CONNECT 代理）。
+沙箱的 DNS 必须把**外部域名也答成 router IP**（10.233.25.107），沙箱连到 router，Envoy 按 SNI/Host 出网。
+
+而 dns-controller 生成的 Corefile 只有内部 actor zone，外部域名 REFUSED → 模型 API 连不上（TRANSPORT）。
+
+### 修复（scripts/fix-dns-egress.sh，已接入 make install-dependency）
+1. 建 kube-system/kube-dns ConfigMap（上游 = 集群 CoreDNS IP）
+2. substrate coredns 加 `.:53 { template IN A . → atenet-router IP }`（import 进 dns-controller 的动态 Corefile）
+3. dns Deployment 挂载 extra ConfigMap，coredns 改用 import 入口
+
+至此 jinye（x86）+ demo-tf 全链路闭环：浏览器 → 网关 → adapter → controller → substrate 沙箱 → dsh → 模型 API。

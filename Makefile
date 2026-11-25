@@ -20,6 +20,8 @@ install: install-dependency install-agent ## 全装：基础组件 + Agent
 
 install-dependency: ## 安装集群级基础组件（Gateway API / kgateway / substrate / kagent）
 	@scripts/bootstrap.sh
+	@scripts/fix-dns-egress.sh
+
 
 install-agent: ## 部署 Agent（adapter / Gateway / SandboxAgent / SRE）
 	@scripts/deploy.sh
