@@ -31,9 +31,9 @@
    验证 `dsh --version` / `kubectl version --client` / `python3 --version`
 2. `nerdctl commit` → `dsh-runtime:0.1.0`（amd64）
 3. 三个 COPY 型镜像：`dsh-a2a` / `sre-agent` / `adapter`（带 `--change` 保留 ENTRYPOINT/USER/ENV）
-4. jinye 上 `make bootstrap`（Gateway API → kgateway → substrate → kagent）
+4. jinye 上 `make install-dependency`（Gateway API → kgateway → substrate → kagent）
 5. 适配器加 `KUBECONFIG_SOURCE=local`，让 kubectl 打到 jinye
-6. `make deploy` + `make verify`
+6. `make install-agent` + `make verify`
 
 ## 回滚
 

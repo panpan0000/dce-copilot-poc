@@ -78,7 +78,7 @@ adapter 和 shim 就是这三段之间的两座桥。**它们是本 POC 的实�
 | `DCE_CLUSTER` | DCE 里托管的 K8s 集群名 | DCE 控制台 → 集群管理 → 集群名 | `kpanda-global-cluster` |
 | `JWT_ISSUER` | DCE 签发 token 的 issuer | 解开一个登录 token 看 `iss`（见下） | `https://<dce>:31909/auth/realms/ghippo` |
 | `JWT_AUDIENCE` | token 的受众 | 同一个 token 看 `aud` | `__internal-ghippo` |
-| `EXTENSION_GATEWAY_BASE` | **本仓库自己部署的入口网关**（不是 DCE 的网关） | `make deploy` 结束会打印 | `http://<gateway-ip>:8080` |
+| `EXTENSION_GATEWAY_BASE` | **本仓库自己部署的入口网关**（不是 DCE 的网关） | `make install-agent` 结束会打印 | `http://<gateway-ip>:8080` |
 | `IMAGE_REGISTRY` / `IMAGE_TAG` | 你要构建并推送到的仓库 | 你自己填（集群能拉到的地址） | `registry.example.com/dce-copilot` / `0.1.0` |
 
 `iss` / `aud` 怎么读：在已登录的 DCE 页面按 F12，控制台执行
@@ -124,7 +124,7 @@ make check
 ### 4. 装基础组件
 
 ```bash
-make bootstrap
+make install-dependency
 ```
 
 官方 Helm 顺序：Gateway API CRD → kgateway → substrate → kagent。
@@ -133,7 +133,7 @@ make bootstrap
 ### 5. 部署应用
 
 ```bash
-make deploy
+make install-agent
 ```
 
 结束时会打印入口地址，例如：
@@ -152,7 +152,7 @@ make deploy
 4. 选择仓库里的 `extension/` 目录
 5. 点扩展的 **详情 → 扩展程序选项**，填两项：
    - **DCE 控制台地址**：你平时登录 DCE 的浏览器地址，如 `http://10.31.223.20:31284`
-   - **入口网关地址**：`make deploy` 打印的那个，如 `http://192.168.194.153:8080`
+   - **入口网关地址**：`make install-agent` 打印的那个，如 `http://192.168.194.153:8080`
 6. 保存，然后**刷新 DCE 页面**——右下角会出现带 `当前用户 <你的用户名>` 的面板
 
 > 想改默认值（比如批量分发）才需要 `make extension`，它会把地址写进 `config.js`，省掉第 5 步。
@@ -208,7 +208,7 @@ docs/                  architecture / install / gotchas / security / mock-dce
 
 ```bash
 cp config.env.example .env          # 填 DCE / 镜像仓库 / 网关地址
-make check && make build && make bootstrap && make deploy && make extension
+make check && make build && make install-dependency && make install-agent && make extension
 TOKEN_FILE=~/token.txt make verify  # token 从浏览器 localStorage['ANAKIN_TOKEN'] 取
 ```
 

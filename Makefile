@@ -16,11 +16,14 @@ build: ## 构建 4 个镜像（dsh-a2a / sre-agent / adapter / controller-fix）
 fetch-images: ## 集群不能出网时，从能出网的机器搬镜像（NODE=root@host make fetch-images）
 	@NODE=$${NODE:?用法: NODE=root@host make fetch-images} scripts/fetch-images.sh --from-charts
 
-bootstrap: ## 安装基础组件（Gateway API + kgateway + substrate + kagent）
+install: install-dependency install-agent ## 全装：基础组件 + Agent
+
+install-dependency: ## 安装集群级基础组件（Gateway API / kgateway / substrate / kagent）
 	@scripts/bootstrap.sh
 
-deploy: ## 部署应用侧资源（SandboxAgent/WorkerPool/网关/adapter/SRE）
+install-agent: ## 部署 Agent（adapter / Gateway / SandboxAgent / SRE）
 	@scripts/deploy.sh
+
 
 extension: ## 生成扩展的 config.js 并打包
 	@scripts/extension.sh

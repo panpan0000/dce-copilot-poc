@@ -1,15 +1,15 @@
 # 安装
 
-一台 Kubernetes 集群 ≈ 30 分钟。前提条件不满足时，`make bootstrap` 会停在第一步并告诉你缺什么。
+一台 Kubernetes 集群 ≈ 30 分钟。前提条件不满足时，`make install-dependency` 会停在第一步并告诉你缺什么。
 
 ## 1. 前置条件
 
 | 需要 | 为什么 | 怎么准备 |
 |---|---|---|
 | Kubernetes ≥ 1.28 + Helm 3 | 装 kgateway / substrate / kagent | 任意发行版，k3s / kind / 云托管都行 |
-| **gVisor（runsc）** | Actor 跑在 gVisor 沙箱里，不装就起不来 | 节点预装并在 containerd 注册 RuntimeClass（[官方](https://gvisor.dev/docs/user_guide/install/)），`make bootstrap` 会检查 `runtimeclass/gvisor` |
+| **gVisor（runsc）** | Actor 跑在 gVisor 沙箱里，不装就起不来 | 节点预装并在 containerd 注册 RuntimeClass（[官方](https://gvisor.dev/docs/user_guide/install/)），`make install-dependency` 会检查 `runtimeclass/gvisor` |
 | **默认 StorageClass** | substrate 的快照与 Actor 目录要 PVC | k3s 自带 local-path；云上用默认云盘 SC |
-| **LoadBalancer** | `poc-gateway` 要一个外部 IP | 云 LB / MetalLB / k3s 的 svclb 都可以。没有时：`INSTALL_METALLB=true METALLB_POOL=<cidr> make bootstrap` |
+| **LoadBalancer** | `poc-gateway` 要一个外部 IP | 云 LB / MetalLB / k3s 的 svclb 都可以。没有时：`INSTALL_METALLB=true METALLB_POOL=<cidr> make install-dependency` |
 | 可拉取的镜像仓库 | 集群要从它拉自建镜像（本项目不提供现成镜像） | 一个你集群能访问的 registry，`IMAGE_REGISTRY` 指向它 |
 | **一个 DCE 环境** | 身份、权限、指标、Notebook 都来自 DCE | 提供 kpanda / insight / baize 接口，并知道 issuer / audience |
 
@@ -46,7 +46,7 @@ IMAGE_REGISTRY=<你集群能拉的仓库> IMAGE_TAG=0.1.0 make build
 ## 4. 安装基础组件
 
 ```bash
-make bootstrap
+make install-dependency
 ```
 
 它会：
@@ -58,7 +58,7 @@ make bootstrap
 ## 5. 部署应用
 
 ```bash
-make deploy
+make install-agent
 ```
 
 做的事：渲染清单（`build/render/`）→ apply adapter / Gateway / HTTPRoute / JWT 策略 / SRE / WorkerPool / SandboxAgent
@@ -90,7 +90,7 @@ TOKEN_FILE=~/token.txt make verify
 |---|---|
 | bootstrap 第 0 步失败 | 缺 gVisor / 默认 StorageClass；按提示准备 |
 | `poc-gateway` 一直是 `<pending>` | 集群没有 LB 实现，见前置条件 |
-| adapter CrashLoopBackOff | 缺 `dce-jwks` ConfigMap（`make deploy` 会建），或 `.env` 缺项 |
+| adapter CrashLoopBackOff | 缺 `dce-jwks` ConfigMap（`make install-agent` 会建），或 `.env` 缺项 |
 | SandboxAgent 拒绝创建 | Actor 镜像用了 tag 而非 digest |
 | 网关 401 | issuer / audience 与 DCE 不一致，或 JWKS 里没有对应 kid |
 | Actor 创建失败 | 见 [gotchas.md](gotchas.md) 第 1 条 |
