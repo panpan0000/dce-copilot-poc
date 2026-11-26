@@ -233,3 +233,30 @@ substrate 0.0.8 的 ActorTemplate spec **没有 egress 字段**，沙箱出网�
 3. dns Deployment 挂载 extra ConfigMap，coredns 改用 import 入口
 
 至此 jinye（x86）+ demo-tf 全链路闭环：浏览器 → 网关 → adapter → controller → substrate 沙箱 → dsh → 模型 API。
+
+
+## 2026-11-26 10:20 慢的根因：没有 KVM（systrap 软件模式）
+
+用户在 macOS（OrbStack）上 checkpoint/restore 只有 0.8s，jinye 上却 30-60s。**不是镜像大小的问题**，实测：
+
+```
+$ ls /dev/kvm                    → No such file or directory
+$ grep -cE "vmx|svm" /proc/cpuinfo → 0          # CPU 未暴露硬件虚拟化
+$ modprobe kvm_intel             → Operation not supported
+$ cat /sys/class/dmi/id/product_name → VMware Virtual Platform
+```
+
+jinye 的节点是 **VMware 虚拟机，没有开启嵌套虚拟化** → 没有 `/dev/kvm` →
+gVisor 只能用 **systrap（纯软件）** 模式（runsc 日志里 `Platform: systrap`）。
+
+**KVM vs systrap 对 checkpoint/restore 的差距是数量级的**：
+- OrbStack（KVM/硬件）：0.8s
+- jinye（systrap/软件）：30-60s
+
+### 修复（需要基础设施侧）
+在 ESXi 上给这两台虚拟机**开启嵌套虚拟化**（`vhv.enable = TRUE` / 暴露 `vmx`），
+节点出现 `/dev/kvm` 后，gVisor 自动切到 KVM，restore 回到亚秒级。
+
+### 若不改基础设施
+systrap 模式下只能缩小 checkpoint：给 ActorTemplate 设 `snapshotsConfig.onPause: Data`
+（挂起时不存内存快照，恢复时冷启动 ~15s），或减少 actor 内存占用。
