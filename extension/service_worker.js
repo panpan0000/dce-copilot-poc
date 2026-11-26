@@ -66,17 +66,11 @@ function getPageOrigin(sender) {
     throw new Error('页面来源无效');
   }
 
-  // 允许两个来源：配置的 DCE 地址（options/config.js），或已配置网关所在的页面。
-  // 真正的安全边界在网关与 adapter（都校验 JWT），这里只防"任意站点借用扩展"。
-  // 没配置过（还是模板占位值）时，直接采用当前页面来源，避免装完必须先去填选项
-  if (!DCE_ORIGIN || DCE_ORIGIN.includes('example.com')) {
-    DCE_ORIGIN = origin;
-    CFG.dceOrigin = origin;
-  }
-  const allowed = new Set([DCE_ORIGIN, CFG.extensionOrigin].filter(Boolean));
-  if (!allowed.has(origin)) {
-    throw new Error(`页面来源不是允许的 DCE 地址（当前 ${origin}，已配置 ${[...allowed].join(', ') || '无'}，请在扩展选项里填写）`);
-  }
+  // 页面来源就是 DCE 地址：内容脚本只被 manifest 注入到 DCE 页面，
+  // 所以 DCE API 永远用页面自己的 origin，不依赖 storage 里的旧配置，
+  // 也不会因为换 DCE 忘记改配置而 502。真正的安全边界在网关与 adapter（都校验 JWT）。
+  DCE_ORIGIN = origin;
+  CFG.dceOrigin = origin;
 
   // Chrome provides sender.origin for content-script messages in current
   // versions.  When present, check it as a second signal; do not trust it
@@ -147,6 +141,9 @@ async function callGateway(tabId, path, init, timeoutMs) {
   const token = await readDceToken(tabId);
   // This header only selects a route. The selected agent must independently
   // verify the same DCE JWT belongs to the user whose Pod it serves.
+  if (!GATEWAY_BASE || GATEWAY_BASE.includes('example.com')) {
+    throw new Error('还没配置入口网关地址：请在扩展「选项」里填 http://<节点IP>:<nodePort>（make url 可查）');
+  }
   const username = await currentUser(token);
   const headers = new Headers(init?.headers || {});
   headers.set('Authorization', `Bearer ${token}`);
