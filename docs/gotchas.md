@@ -8,12 +8,12 @@
 - **处理**：给 runsc 注入 `-ignore-cgroups`；默认 `auto` 探测（能写就不注入），普通 x86 节点自动跳过。
   这只在 macOS/OrbStack 上需要，不是可移植配置。
 
-## 2. checkpoint/restore 慢（systrap vs KVM）
-- **现象**：restore 8~11s、checkpoint 8~9s（物理机应 <1s）。
-- **原因**：`runsc` **默认平台是 systrap**，不会自动识别 KVM；而官方明确说
-  **KVM 只在物理机最快，虚拟机里 systrap 往往更好**（[gVisor 文档](https://gvisor.dev/docs/user_guide/platforms/)）。
-- **处理**：物理机 → 让 runsc 带 `--platform=kvm`（改 worker 的 flags 或 RuntimeClass runtimeArgs）；
-  虚拟机 → 保持 systrap，接受秒级开销，不要指望开嵌套虚拟化提速。
+## 2. checkpoint/restore 慢（磁盘 I/O，不是平台）
+- **现象**：restore 8~11s、checkpoint 8~9s（快盘应 <1s）。
+- **原因**：checkpoint/restore 本质是"把内存快照写盘/读盘"，**瓶颈在磁盘**；
+  `runsc` 平台（KVM vs systrap）影响的是运行期 syscall，与快照读写无关。
+  jinye 实测：VMware 虚盘写速只有 26.6 MB/s，134M 快照写盘就要 5s。
+- **处理**：换快盘 / 把 `/var/lib/ateom-gvisor` 挂 tmpfs / 减小快照体积。
 
 ## 3. Actor `no free workers available`
 - **现象**：`ResumeActor → AssignWorker: no free workers available`，worker Pod 明明 Running。

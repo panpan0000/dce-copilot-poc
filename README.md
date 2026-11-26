@@ -64,51 +64,65 @@ adapter 和 shim 就是这三段之间的两座桥。**它们是本 POC 的实�
 面向**全新 x86（linux/amd64）服务器集群**。默认使用 `release-ci.daocloud.io/common-ci` 镜像仓库和
 `demo-tf-alpha.daocloud.cn` 这套 DCE 作为示例，换成你自己的即可。
 
-## ⚠️ 性能前提：物理机用 KVM，虚拟机用 systrap
+## ⚠️ 性能前提：快照读写走磁盘，磁盘速度才是关键
 
-**这一条直接决定对话是 3 秒还是 60 秒，装之前务必先看清。**
+**这一条决定对话是 3 秒还是 60 秒，装之前务必先看清。**
 
-substrate 的 Actor 是「每轮对话结束就挂起、下轮恢复」的，挂起/恢复走 gVisor 的
-checkpoint/restore。gVisor 的平台由 `runsc --platform` 决定：
+substrate 的 Actor 是「每轮对话结束就挂起、下轮恢复」的。挂起/恢复 = gVisor 把
+**Actor 的内存快照写盘 / 读盘**：
 
-> **默认是 `systrap`，不会自动识别 KVM**；要用 KVM 必须显式传 `--platform=kvm`。
-> —— [gVisor: Changing Platforms](https://gvisor.dev/docs/user_guide/platforms/)
+```
+挂起（checkpoint） = 把内存 dump 成文件 + 写盘
+恢复（restore）    = 读文件 + 重建内存
+```
 
-而官方对"选哪个"的结论是：
+所以 **checkpoint/restore 本质是磁盘 I/O，瓶颈在磁盘，不在 gVisor 平台。**
 
-> **For best performance, use the KVM platform on bare-metal machines only.**
-> **If you have to run gVisor within a virtual machine, the `systrap` platform will often
-> yield better performance than KVM.**
+### gVisor 平台（KVM vs systrap）到底影响什么
 
-也就是说：
+`runsc` 默认平台是 `systrap`（不会自动识别 KVM，要用 KVM 必须显式传 `--platform=kvm`，
+见 [gVisor: Changing Platforms](https://gvisor.dev/docs/user_guide/platforms/)）。
 
-| 节点类型 | 推荐平台 | 怎么做 |
+但平台影响的是**沙箱运行时的系统调用拦截开销**，**对"把内存快照写盘"这件事关系不大**。
+官方也明确：KVM 只在物理机最快，虚拟机里 systrap 往往更好。
+
+> 一句话：**平台影响"跑得快不快"，磁盘影响"挂起/恢复快不快"。** 这是两件事。
+
+### 实测：慢在磁盘，不在平台
+
+jinye（VMware 虚机）实测：
+
+```
+checkpoint = 8.8s
+restore    = 11s
+
+节点磁盘写速（dd 直写 134M）：
+  写 26.6 MB/s   ← 极慢（SSD 应有几百 MB/s，HDD 也有 100+ MB/s）
+  读 67.7 MB/s
+  盘 = /dev/mapper/ubuntu--vg-ubuntu--lv（VMware 虚拟盘）
+
+对账：134M @ 26.6 MB/s = 5.0s  ← 快照写盘占了 checkpoint 的大头
+```
+
+对比 macOS/OrbStack 的 0.8s：不是它「有 KVM」或「是 arm64」，而是**它的磁盘（Apple Silicon NVMe）
+读写 134M 只要零点几秒**，jinye 的 VMware 虚盘要 5 秒。
+
+### 怎么优化（按性价比）
+
+| 方案 | 效果 | 代价 |
 |---|---|---|
-| **物理机（bare metal）** | **KVM** | 保证有 `/dev/kvm`（`ls -l /dev/kvm`），并让 runsc 带 `--platform=kvm` |
-| **虚拟机（VMware / 云主机）** | **systrap** | 保持默认即可；**开嵌套虚拟化通常不会更快**，官方明确说 VM 里 systrap 往往更好 |
+| **换快盘**（SSD datastore / NVMe） | 8.8s → 1s 内 | 基础设施：把 VM 迁到 SSD 存储 |
+| **快照目录挂 tmpfs（内存盘）** | 写入变内存速度，~1s | 吃内存（节点内存要够装快照） |
+| **减小快照体积**（减 actor 内存） | 按比例降 | 治标 |
 
-**所以：如果你的集群跑在虚拟机上，不要为了"提速"去开嵌套虚拟化** —— 那是白费力气，
-而且官方提醒嵌套虚拟化本身有性能损耗和历史安全风险（CVE-2018-12904）。
+**首选 tmpfs**：把 `/var/lib/ateom-gvisor` 挂到 tmpfs，绕开慢盘，不用等基础设施改造。
 
-### 实测数据（供对照）
-
-| 环境 | 架构 | 平台 | checkpoint | restore |
-|---|---|---|---|---|
-| macOS / OrbStack | arm64 | 默认 | ~0.3s | **0.8s** |
-| jinye（VMware VM） | amd64 | systrap | **8.8s** | **11s** |
-
-两者差 10 倍以上，但造成差异的**不是"有没有 KVM"**（jinye 开了嵌套虚拟化后仍走 systrap），
-更可能是 **arm64 与 amd64 的 gVisor 实现差异 + CPU 性能**。
-
-> 结论：**想在 x86 上获得亚秒级 restore，应该用物理机 + `--platform=kvm`；
-> 在虚拟机里接受 systrap 的秒级开销，或改用快照精度更低的挂起策略。**
-
-### 0. 前置条件### 0. 前置条件
+### 0. 前置条件
 
 | 项 | 说明 |
 |---|---|
 | 一个 x86 K8s 集群 | 能装 CRD，有默认 StorageClass |
-| **物理机 or 虚拟机** | 物理机配 KVM 最快；虚拟机保持 systrap（见上一节） |
+| **节点磁盘要快**（SSD/NVMe） | **checkpoint/restore 的瓶颈在磁盘，见上一节** |
 | 一个 DCE 环境 | 身份、权限、集群托管都来自 DCE；没有就先跑 `make mock-dce` |
 | 能拉 `release-ci` 镜像 | 集群节点要能匿名拉 `release-ci.daocloud.io`（已公开） |
 | DeepSeek 模型 Key | 放 `secrets/.env.secret`，不进 git |
