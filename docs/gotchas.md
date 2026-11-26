@@ -15,6 +15,19 @@
   jinye 实测：VMware 虚盘写速只有 26.6 MB/s，134M 快照写盘就要 5s。
 - **处理**：换快盘 / 把 `/var/lib/ateom-gvisor` 挂 tmpfs / 减小快照体积。
 
+## 2.5 沙箱模型调用 `TRANSPORT`（出网网关僵死）
+- **现象**：对话能进沙箱，但模型调用 `DeepSeek API request ... failed, code=TRANSPORT`，retry 5 次无输出。
+- **原因（最常见）**：atenet-router（出网网关）的 egress 转发僵死了。反复重启 worker/ate-api、改 DNS、
+  挂 tmpfs 等操作可能把它搞僵；它不是"缺组件"，只是 stale 状态。
+- **处理**：先重启出网网关，再重建 golden：
+  ```bash
+  kubectl -n ate-system rollout restart deploy/atenet-router
+  kubectl -n kagent delete actortemplate --all --ignore-not-found
+  kubectl -n kagent delete pod -l ate.dev/worker-pool=kagent-default --grace-period=0 --force
+  ssh <worker-node> 'rm -rf /var/lib/ateom-gvisor/actors/*'
+  ```
+  通常第一条消息即可恢复出网。
+
 ## 3. Actor `no free workers available`
 - **现象**：`ResumeActor → AssignWorker: no free workers available`，worker Pod 明明 Running。
 - **原因**：两个独立原因，都会报同一句话——
