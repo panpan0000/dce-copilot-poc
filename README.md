@@ -228,25 +228,41 @@ TOKEN_FILE=~/token.txt make verify
 | whoami 解析到用户 | PASS |
 | 自然对话（非流式 + 流式） | PASS，真实模型回答 |
 | 浏览器面板 | PASS（显示当前用户、能对话） |
-| 沙箱出网（模型 API） | PASS（外部域名走 egress 网关） |
+| 沙箱出网（模型 API） | ⚠️ 能通，但间歇性 `TRANSPORT`（gVisor sentry 崩溃，见下节「版本结论」） |
 
-> 完整 9 项 `make verify` 需用当前有效 token 重跑；核心链路（身份 + 对话 + 面板 + 出网）已实测通过。
+> 完整 9 项 `make verify` 需用当前有效 token 重跑。核心链路（身份 + 对话 + 面板）已实测通过；出网受 gVisor sentry 崩溃影响不稳定。
 
-## 已知限制（没 KVM 时）
+## ⚠️ 已知限制与版本结论（重要，先看这个）
 
-如果节点没有 `/dev/kvm`（见「性能前提」），当前的实测表现是：
+### 核心结论：版本旧 + gVisor 在 VMware 上不稳
+
+这套 POC 用的 substrate **0.0.8** + kagent **0.10.0-beta6** 是老版本；当前 substrate 已到 0.6.x、kagent 已到 1.0.x。
+
+在 jinye（VMware 虚机，内核 5.15）上实测，**gVisor 的 systrap 平台 sentry 会间歇性崩溃**
+（worker 日志 `connecting to control server ... connection refused` = 沙箱内核已死），
+导致沙箱进程死亡、模型调用 `TRANSPORT`。这是「gVisor systrap 跑在 VMware guest kernel 上」的固有问题，不是配置能修的。
+
+| 环境 | 内核 | gVisor | 结果 |
+|---|---|---|---|
+| macOS / OrbStack | 7.0.11-orbstack（定制） | arm64 | 稳定，5~8s/条 |
+| jinye / VMware | 5.15.0-143-generic | amd64 systrap | sentry 间歇崩溃，30~90s 或 TRANSPORT |
+
+- 新版 kagent 有 **RevertSession** 自动恢复 CRASHED actor；beta6 没有。
+- **强烈建议：升级 substrate/kagent，而不是在旧版上打补丁。**
+
+### 无 KVM 时的实测表现
 
 | 场景 | 表现 |
 |---|---|
 | 新会话第 1 条消息 | 30~50 秒（冷启动 + 软件快照） |
-| 同一会话第 2 条 | 有时 5~7 秒（Actor 仍热），有时超时（已挂起，又要软件恢复） |
-| 连续多条 | 容易 `no free workers`（worker 被慢恢复占住） |
+| 同一会话第 2 条 | 有时 5~7 秒，有时超时 |
+| 连续多条 | 容易 `no free workers` |
 
-**这不是代码 bug**，是 systrap 的固有开销。开 KVM 后恢复到 3~5 秒/条。
-
-在没有 KVM 的环境里演示时建议：**一个会话连续聊、别频繁点"新会话"**；变慢就重启 worker 清状态：
+### 临时缓解（治标不治本）
 
 ```bash
+kubectl -n ate-system rollout restart deploy/atenet-router
+kubectl -n kagent delete actortemplate --all --ignore-not-found
 kubectl -n kagent delete pod -l ate.dev/worker-pool=kagent-default --grace-period=0 --force
 ssh <worker-node> 'rm -rf /var/lib/ateom-gvisor/actors/*'
 ```
@@ -259,7 +275,7 @@ ssh <worker-node> 'rm -rf /var/lib/ateom-gvisor/actors/*'
 | 沙箱起不来，`runsc` 资产拉不到 | gVisor 的 runsc 从 `gs://gvisor` 下载，出不了网就失败；离线环境要本地化 |
 | golden snapshot 一直不就绪 | Actor 镜像必须监听 `:8081/readyz`（kagent 硬编码的探针） |
 | 沙箱里模型报 `no API key` | 凭据用新版格式 `version:1 + refs:`，且补 `DEEPSEEK_API_KEY` env |
-| 沙箱里模型报 `TRANSPORT` | substrate 0.0.8 的 DNS 只服务内部名，外部域名要答成 router IP 走 egress（已内置） |
+| 沙箱里模型报 `TRANSPORT` | 根因是 gVisor systrap 在 VMware 上 sentry 崩溃（见上节），非 DNS/证书/egress；建议升级 |
 | 请求撞上 Actor 休眠就超时 | controller 打了唤醒竞态补丁（`images/controller-fix/`） |
 | Valkey 重置后适配器起不来 | 单节点集群要显式设 `cluster-announce-ip` / bus-port |
 | 换会话要改环境变量、全员历史失效 | 会话 = hash(用户 + 会话标识) |

@@ -15,18 +15,24 @@
   jinye 实测：VMware 虚盘写速只有 26.6 MB/s，134M 快照写盘就要 5s。
 - **处理**：换快盘 / 把 `/var/lib/ateom-gvisor` 挂 tmpfs / 减小快照体积。
 
-## 2.5 沙箱模型调用 `TRANSPORT`（出网网关僵死）
-- **现象**：对话能进沙箱，但模型调用 `DeepSeek API request ... failed, code=TRANSPORT`，retry 5 次无输出。
-- **原因（最常见）**：atenet-router（出网网关）的 egress 转发僵死了。反复重启 worker/ate-api、改 DNS、
-  挂 tmpfs 等操作可能把它搞僵；它不是"缺组件"，只是 stale 状态。
-- **处理**：先重启出网网关，再重建 golden：
+## 2.5 沙箱模型调用 `TRANSPORT`（根因：gVisor systrap 在 VM 上崩溃 + 版本旧）
+- **现象**：对话能进沙箱，模型调用 `DeepSeek API request ... failed, code=TRANSPORT`，retry 5 次无输出。
+- **根因（最终结论）**：gVisor 的 systrap 平台在 **VMware guest kernel（5.15）** 上 sentry 间歇性崩溃
+  （worker 日志里 `connecting to control server ... connection refused` = 沙箱内核已死）。
+  沙箱进程一死，模型调用自然失败。macOS 不崩是因为 OrbStack 定制内核 7.0.11 + arm64 gVisor。
+- **为什么不是别的原因**（都已排查并排除）：
+  - 不是 egress 缺失——沙箱靠直接 NAT 出网，曾多次成功返回 "ok"；
+  - 不是证书——egress CA 已烤进镜像（见 #7）；
+  - 不是 DNS——substrate DNS 已 forward 到集群 CoreDNS 解析真实 IP（见 #6）。
+- **版本是关键**：substrate 0.0.8 + kagent 0.10.0-beta6 是老版本；新版（substrate 0.6.x / kagent 1.0.x）
+  已补全 egress 网关，并有 **RevertSession** 自动恢复 CRASHED actor。**强烈建议升级，而不是在旧版上打补丁。**
+- **临时缓解**（治标不治本，重启 atenet-router + 重建 golden 能恢复一次）：
   ```bash
   kubectl -n ate-system rollout restart deploy/atenet-router
   kubectl -n kagent delete actortemplate --all --ignore-not-found
   kubectl -n kagent delete pod -l ate.dev/worker-pool=kagent-default --grace-period=0 --force
   ssh <worker-node> 'rm -rf /var/lib/ateom-gvisor/actors/*'
   ```
-  通常第一条消息即可恢复出网。
 
 ## 3. Actor `no free workers available`
 - **现象**：`ResumeActor → AssignWorker: no free workers available`，worker Pod 明明 Running。
@@ -46,13 +52,11 @@
 - **原因**：新版 DSH 的凭据文件要 `version: 1 + refs:` 格式（旧平铺格式会被拒），且 `refs.DEEPSEEK_API_KEY` 要有值。
 - **处理**：凭据走 `DSH_CREDENTIALS_B64`（base64 的新格式文件）+ `DEEPSEEK_API_KEY` 字面 env 双保险。
 
-## 6. 沙箱里模型 `TRANSPORT`（出网失败）
-- **现象**：模型 API 请求 `failed (TRANSPORT)`。
-- **原因**：substrate 0.0.8 的 dns-controller 生成的 Corefile 只有内部 actor zone，外部域名 `REFUSED`。
+## 6. 沙箱 DNS 外部域名 REFUSED（前置修复，非 TRANSPORT 根因）
+- **现象**：substrate 0.0.8 的 dns-controller 生成的 Corefile 只有内部 actor zone，外部域名 `REFUSED`。
 - **处理**：外部域名 DNS 答成 atenet-router IP（沙箱流量走 egress 网关）。`make install-dependency` 已内置（`scripts/fix-dns-egress.sh`）。
 
-## 7. 沙箱里模型 `TRANSPORT`（另一个原因：不信任 egress 网关证书）
-- **现象**：模型调用反复 `llm/retry` 后 `TRANSPORT`，但 DNS 解析正常、节点能直连模型 API。
+## 7. 沙箱不信任 egress 网关证书（前置修复，非 TRANSPORT 根因）
 - **原因**：substrate 的 egress 网关用自己的 CA（`api-ca`）签发证书做 TLS 终止；Actor 里没有这个 CA，
   也没有 `NODE_EXTRA_CA_CERTS`，于是证书校验失败。
 - **处理**：把 `ate-system/ateapi-ca` 的 `ca.crt` 做成 `egress-trust` ConfigMap（key 必须叫 `trust-bundle.pem`），
