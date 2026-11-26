@@ -64,11 +64,40 @@ adapter 和 shim 就是这三段之间的两座桥。**它们是本 POC 的实�
 面向**全新 x86（linux/amd64）服务器集群**。默认使用 `release-ci.daocloud.io/common-ci` 镜像仓库和
 `demo-tf-alpha.daocloud.cn` 这套 DCE 作为示例，换成你自己的即可。
 
+## ⚠️ 性能前提：节点必须有 KVM（嵌套虚拟化）
+
+**这一条直接决定对话是 3 秒还是 60 秒，装之前务必先确认。**
+
+substrate 的 Actor 是「每轮对话结束就挂起、下轮恢复」的。挂起/恢复走 gVisor 的
+checkpoint/restore，而 gVisor 有两种运行平台：
+
+| 平台 | 条件 | checkpoint/restore |
+|---|---|---|
+| **KVM（硬件）** | 节点有 `/dev/kvm` | **~0.8 秒** ✅ |
+| systrap（软件模拟） | 没有 `/dev/kvm` | **30~60 秒**（慢一个数量级） |
+
+在任意一个 worker 节点上检查：
+
+```bash
+ls -l /dev/kvm                    # 存在才行
+grep -cE "vmx|svm" /proc/cpuinfo  # 应 > 0（Intel=vmx, AMD=svm）
+```
+
+**节点是 VMware / 云主机但没有 `/dev/kvm`** → 没开嵌套虚拟化。在虚拟化平台开启后重启：
+- ESXi：虚拟机设置 → CPU → 勾选 *Expose hardware assisted virtualization to the guest OS*（或 VMX 里 `vhv.enable = TRUE`）
+- 云主机：选择支持嵌套虚拟化的实例类型
+
+不开启的话整套东西**能跑**，但每轮对话 30~60 秒，且容易把 worker 占满导致 `no free workers`。
+
+> 实测对比：同一套镜像在 macOS/OrbStack（有 KVM）restore 0.8s，在没开嵌套虚拟化的
+> VMware 虚机上 30~60s —— **瓶颈是虚拟化平台，不是镜像大小或网络**。
+
 ### 0. 前置条件
 
 | 项 | 说明 |
 |---|---|
-| 一个 x86 K8s 集群 | 能装 CRD，有默认 StorageClass，节点有 gVisor RuntimeClass（见 docs/install.md） |
+| 一个 x86 K8s 集群 | 能装 CRD，有默认 StorageClass |
+| **节点有 `/dev/kvm`** | **性能关键，见上一节** |
 | 一个 DCE 环境 | 身份、权限、集群托管都来自 DCE；没有就先跑 `make mock-dce` |
 | 能拉 `release-ci` 镜像 | 集群节点要能匿名拉 `release-ci.daocloud.io`（已公开） |
 | DeepSeek 模型 Key | 放 `secrets/.env.secret`，不进 git |

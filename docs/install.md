@@ -33,7 +33,7 @@
 | **默认 StorageClass** | substrate 的快照与 Actor 目录要 PVC | k3s 自带 local-path；云上用默认云盘 SC |
 | **可拉取 `release-ci` 镜像** | 集群节点要匿名拉 `release-ci.daocloud.io`（已公开） | 节点出网策略放行该域名，或配 registry mirror |
 | **一个 DCE 环境** | 身份、权限、集群托管都来自 DCE | 提供 kpanda / insight / baize 接口，知道 issuer / audience |
-| **gVisor（runsc）** | Actor 跑在 gVisor 沙箱里 | 见下节 |
+| **gVisor（runsc）+ `/dev/kvm`** | Actor 跑在 gVisor 沙箱里；**没有 KVM 会慢 10~40 倍** | 见下节 |
 
 ### gVisor 说明
 
