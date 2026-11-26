@@ -7,11 +7,12 @@ USER root
 COPY start.sh   /opt/dsh-a2a/start.sh
 COPY a2a-shim.js /opt/dsh-a2a/a2a-shim.js
 COPY sre-cli.js  /opt/dsh-a2a/sre-cli.js
+COPY sre-cli      /usr/local/bin/sre-cli
 COPY dce-cli.js  /opt/dsh-a2a/dce-cli.js
 COPY dce-bin     /usr/local/bin/dce-bin
 COPY dce         /usr/local/bin/dce
 COPY skills      /home/agent/.dsh/skills
-RUN chmod 0755 /opt/dsh-a2a/start.sh /usr/local/bin/dce /usr/local/bin/dce-bin \
+RUN chmod 0755 /opt/dsh-a2a/start.sh /usr/local/bin/dce /usr/local/bin/dce-bin /usr/local/bin/sre-cli \
  && chmod 0644 /opt/dsh-a2a/a2a-shim.js /opt/dsh-a2a/sre-cli.js /opt/dsh-a2a/dce-cli.js \
  && chown -R 10001:10001 /home/agent/.dsh/skills \
  && chmod -R a+rX /home/agent/.dsh/skills

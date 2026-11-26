@@ -11,6 +11,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls"
 	"context"
 	"crypto"
 	"crypto/rsa"
@@ -557,7 +558,12 @@ func fetchDCEKubeconfig(jwt string) (string, error) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Authorization", "Bearer "+jwt)
-	c := &http.Client{Timeout: 20 * time.Second}
+	c := &http.Client{
+		Timeout: 20 * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		},
+	}
 	resp, err := c.Do(req)
 	if err != nil {
 		return "", err

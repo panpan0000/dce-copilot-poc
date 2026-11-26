@@ -21,6 +21,7 @@ mkdir -p "$CTX_DSH"
 cp "$REPO_ROOT"/images/dsh-a2a/*.js "$CTX_DSH"/
 cp "$REPO_ROOT"/images/dsh-a2a/*.sh "$CTX_DSH"/
 cp "$REPO_ROOT"/images/dsh-a2a/dce "$CTX_DSH"/dce
+cp "$REPO_ROOT"/images/dsh-a2a/sre-cli "$CTX_DSH"/sre-cli
 cp "$REPO_ROOT"/images/dsh-a2a/Dockerfile "$CTX_DSH"/
 # egress 网关的 CA 烤进镜像（kagent beta6 不传 volumes，信任链只能进镜像）
 if kubectl -n ate-system get cm ateapi-ca >/dev/null 2>&1; then
