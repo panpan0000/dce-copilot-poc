@@ -68,6 +68,17 @@ else
 fi
 
 # ── 等就绪 ────────────────────────────────────────────────
+# egress 网关的 CA：Actor 必须信任它，否则模型调用 TLS 失败
+"$KUBECTL" -n "$NS_SUBSTRATE" get cm ateapi-ca -o jsonpath='{.data.ca\.crt}' > /tmp/egress-ca.pem 2>/dev/null || true
+if [ -s /tmp/egress-ca.pem ]; then
+  "$KUBECTL" -n "$NS_APP" create configmap egress-trust \
+    --from-file=trust-bundle.pem=/tmp/egress-ca.pem --dry-run=client -o yaml \
+    | "$KUBECTL" apply -f - >/dev/null
+  ok "egress 信任链已就绪"
+else
+  warn "没找到 ateapi-ca，Actor 可能无法调模型（TLS 失败）"
+fi
+
 log "等待 adapter / SRE 就绪"
 "$KUBECTL" -n "$NS_APP" rollout status deploy/substrate-adapter --timeout=180s
 "$KUBECTL" -n "$NS_APP" rollout status deploy/sre-gateway --timeout=180s || warn "sre-gateway 未就绪，检查 Secret sre-backend-token"

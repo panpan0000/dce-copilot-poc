@@ -29,7 +29,21 @@ spec:
       securityContext:
         runAsUser: 0
         runAsGroup: 0
+      # egress 网关用自己的 CA 签发证书；Actor 必须信任它，否则模型调用 TLS 失败（TRANSPORT）
+      volumes:
+        - name: egress-trust
+          configMap: {name: egress-trust}
+      volumeMounts:
+        - name: egress-trust
+          mountPath: /run/kagent/egress
+          readOnly: true
       env:
+        - name: NODE_EXTRA_CA_CERTS
+          value: /run/kagent/egress/trust-bundle.pem
+        - name: SSL_CERT_FILE
+          value: /run/kagent/egress/trust-bundle.pem
+        - name: CURL_CA_BUNDLE
+          value: /run/kagent/egress/trust-bundle.pem
         - name: DSH_PERMISSION_MODE
           value: danger-full-access
         - name: DSH_REASONING_EFFORT
