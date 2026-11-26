@@ -2,6 +2,29 @@
 
 一台 x86（linux/amd64）Kubernetes 集群 ≈ 30 分钟。前提条件不满足时，`make install-dependency` 会停在第一步并告诉你缺什么。
 
+## 0. 换集群 / 换环境要改什么（对照清单）
+
+整个项目只有**一个配置入口** `config.env`，换环境改它就够了。下面是"最容易漏"的清单，按重要程度排：
+
+| 改什么 | 变量 | 怎么填 | 漏了会怎样 |
+|---|---|---|---|
+| **DCE 地址** | `DCE_ORIGIN` | 你登录 DCE 的浏览器地址（不带 `/`） | 身份全挂 |
+| **DCE issuer** | `JWT_ISSUER` | `<DCE_ORIGIN>/auth/realms/ghippo` | 网关 401 |
+| **DCE audience** | `JWT_AUDIENCE` | 通常 `__internal-ghippo` | 网关 401 |
+| **DCE 集群名** | `DCE_CLUSTER` | DCE 里纳管的 K8s 集群名（kubectl 用例打它） | kubectl 用例错 |
+| **DCE 公钥（JWKS）** | 文件 | `curl <DCE_ORIGIN>/auth/realms/ghippo/protocol/openid-connect/certs > deploy/jwks/jwks.json` | 网关 401 |
+| **扩展匹配源** | `EXTENSION_MATCH_ORIGIN` | 与 `DCE_ORIGIN` 一致 | 面板不出现 |
+| **镜像仓库** | `IMAGE_REGISTRY` | 集群能匿名拉到的仓库 | 拉不到镜像 |
+| **存储类** | `STORAGE_CLASS` | 新集群的默认 StorageClass | PVC 卡 Pending |
+| **网关模式** | `GATEWAY_MODE` | 集群没 LB 就 `nodeport` | 入口一直 pending |
+| **节点 IP** | `GATEWAY_IP` | NodePort 模式填节点 IP（脚本也会自动探测） | 扩展连不上 |
+| **KUBECONFIG** | 环境变量 | `export KUBECONFIG=...` 指向新集群 | 命令打到旧集群 |
+| **模型 key** | `secrets/.env.secret` | 新环境的 DeepSeek key | 沙箱里 no API key |
+
+**最容易被忽略的 3 个**：① JWKS（换 DCE 必须重新拉，否则 401）；② `EXTENSION_MATCH_ORIGIN`（不跟 DCE 一致，面板不出现）；③ `STORAGE_CLASS`（换集群常忘记改，PVC 卡死）。
+
+填完跑 `make check`，它会逐项告诉你哪个还是模板值、哪个连不上。
+
 ## 1. 前置条件
 
 | 需要 | 为什么 | 怎么准备 |
@@ -38,6 +61,11 @@ substrate 的沙箱不是用节点 containerd 的 RuntimeClass，而是**由 ate
 cp config.env.example .env
 $EDITOR .env          # DCE 地址、镜像仓库、网关地址、版本
 mkdir -p secrets && cp secrets.env.example secrets/.env.secret   # 模型 key（不进 git）
+
+# 拉 DCE 公钥（JWKS），换 DCE 必须重拉，否则网关校验 token 会 401
+curl -fsSL "$(grep '^DCE_ORIGIN=' .env | cut -d= -f2)/auth/realms/ghippo/protocol/openid-connect/certs" \
+  > deploy/jwks/jwks.json
+
 make check            # 自检：缺项 / 占位符 / 连通性 / CNI 都会提示
 ```
 
