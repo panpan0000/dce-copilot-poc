@@ -156,7 +156,7 @@ make install-agent  # 部署 adapter / Gateway / SandboxAgent / SRE
 
 ### 5. 加载浏览器扩展
 
-扩展在仓库的 **`extension/`** 目录（当前版本 **0.5.0**）。
+扩展在仓库的 **`extension/`** 目录（当前版本 **0.5.1**）。
 
 1. Chrome 打开 `chrome://extensions` → 开启**开发者模式** → **加载已解压的扩展程序**
 2. 选择仓库里的 `extension/` 目录

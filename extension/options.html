@@ -1,14 +1,30 @@
 <!doctype html><meta charset="utf-8"><title>DCE Copilot 设置</title>
-<style>body{font:14px/1.6 -apple-system,"PingFang SC",sans-serif;max-width:520px;margin:40px auto;padding:0 16px}
-label{display:block;margin:16px 0 4px;font-weight:600}input{width:100%;padding:8px;border:1px solid #dde3ee;border-radius:6px}
-button{margin-top:20px;padding:8px 18px;background:#1b63f0;color:#fff;border:0;border-radius:6px;cursor:pointer}
-p{color:#6b7685}code{background:#f0f3f9;padding:1px 4px;border-radius:3px}</style>
+<style>
+body{font:14px/1.6 -apple-system,"PingFang SC",sans-serif;max-width:560px;margin:40px auto;padding:0 16px}
+label{display:block;margin:18px 0 4px;font-weight:600}
+input{width:100%;padding:9px;border:1px solid #dde3ee;border-radius:6px;box-sizing:border-box}
+button{margin-top:22px;padding:9px 20px;background:#1b63f0;color:#fff;border:0;border-radius:6px;cursor:pointer;font-size:14px}
+p{color:#6b7685;margin:6px 0}
+.tip{background:#f7f9fc;border-left:3px solid #1b63f0;padding:10px 12px;border-radius:4px;margin:12px 0}
+code{background:#f0f3f9;padding:1px 4px;border-radius:3px}
+#msg{color:#0a7d33;font-weight:600}
+</style>
 <h2>DCE Copilot 设置</h2>
-<p>填两项即可，改完点保存，然后刷新 DCE 页面。</p>
-<label for="dce">DCE 控制台地址（登录 DCE 的浏览器地址）</label>
-<input id="dce" placeholder="http://10.31.223.20:31284">
-<label for="gw">入口网关地址（make deploy 打印的地址）</label>
-<input id="gw" placeholder="http://192.168.1.240:8080">
+
+<div class="tip">
+  <b>只需要填「入口网关地址」。</b><br>
+  DCE 地址留空即可——扩展会自动使用你当前打开的 DCE 页面地址。
+</div>
+
+<label for="gw">入口网关地址（必填）</label>
+<input id="gw" placeholder="http://172.30.40.186:31853">
+<p>这个地址由 <code>make install-agent</code> 打印，或随时用 <code>make url</code> 再查。</p>
+
+<label for="dce">DCE 控制台地址（可选，留空自动识别）</label>
+<input id="dce" placeholder="留空即可">
+<p>只有当你希望固定某个 DCE 地址时才填，例如 <code>https://demo-tf-alpha.daocloud.cn</code>。</p>
+
 <button id="save">保存</button>
 <p id="msg"></p>
+
 <script src="options.js"></script>

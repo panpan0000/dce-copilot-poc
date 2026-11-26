@@ -131,7 +131,7 @@ kubectl -n watsons-agent-poc create secret generic dsh-config \
 ## 6. 浏览器扩展
 
 ```bash
-# chrome://extensions → 开发者模式 → 加载已解压的扩展程序 → 选仓库里的 extension/（当前版本 0.5.0）
+# chrome://extensions → 开发者模式 → 加载已解压的扩展程序 → 选仓库里的 extension/（当前版本 0.5.1）
 ```
 
 扩展详情 → 扩展程序选项，**只需填网关地址**；DCE 地址留空（扩展会自动用当前页面地址）。
