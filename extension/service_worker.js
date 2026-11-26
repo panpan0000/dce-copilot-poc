@@ -390,6 +390,13 @@ function senderTabId(port) {
   return port?.sender?.tab?.id;
 }
 
+// 首次安装（或更新）时自动打开设置页，避免用户装完不知道要填网关地址。
+chrome.runtime.onInstalled.addListener((details) => {
+  if (details.reason === 'install' || details.reason === 'update') {
+    chrome.runtime.openOptionsPage().catch(() => {});
+  }
+});
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   ensureConfig();
   handleMessage(message, sender)

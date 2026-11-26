@@ -131,10 +131,11 @@ kubectl -n watsons-agent-poc create secret generic dsh-config \
 ## 6. 浏览器扩展
 
 ```bash
-# chrome://extensions → 开发者模式 → 加载已解压的扩展程序 → 选仓库里的 extension/（当前版本 0.5.1）
+# chrome://extensions → 开发者模式 → 加载已解压的扩展程序 → 选仓库里的 extension/（当前版本 0.6.0）
 ```
 
-扩展详情 → 扩展程序选项，**只需填网关地址**；DCE 地址留空（扩展会自动用当前页面地址）。
+**首次安装会自动弹出设置页**；之后也可以从扩展详情 → 扩展程序选项打开。
+只需填网关地址；DCE 地址留空（扩展会自动用当前页面地址）。
 DCE 登录后刷新页面即可。
 
 > 换 DCE 时记得把 `extension/manifest.json` 的 `content_scripts[0].matches` 加上你的 DCE 域名。
