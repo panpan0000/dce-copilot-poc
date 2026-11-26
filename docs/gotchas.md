@@ -17,8 +17,11 @@
 
 ## 3. Actor `no free workers available`
 - **现象**：`ResumeActor → AssignWorker: no free workers available`，worker Pod 明明 Running。
-- **原因**：substrate worker 的可用容量由 Pod 的 `resources.limits.memory` 推算，没设 resources 时容量算成 0。
-- **处理**：WorkerPool 必须设 `template.resources`（至少 `limits.memory`），否则永远"无空闲 worker"。
+- **原因**：两个独立原因，都会报同一句话——
+  1. substrate worker 的可用容量由 Pod 的 `resources.limits.memory` 推算，没设 resources 时容量算成 0；
+  2. **WorkerPool 副本太少**：每轮对话的 Actor 挂起/恢复期间一直占着 worker，1 个副本必然排队。
+- **处理**：① WorkerPool 必须设 `template.resources`（至少 `limits.memory`）；
+  ② **WorkerPool 至少 3 个副本**（`replicas: 3`），1 个不够用。
 
 ## 4. golden snapshot 一直不就绪（ActorTemplate 卡住）
 - **现象**：`ActorTemplate golden snapshot is not ready`，反复 retry。
@@ -58,10 +61,23 @@
 - **原因**：**BYO 不会把 volumes/volumeMounts 传进 Actor**，只有 `env` 生效。
 - **处理**：凭据一律走 `env` + `secretKeyRef`；kubeconfig 由 adapter 每次请求下发，shim 写入 Actor。
 
-## 11. 请求撞上休眠就超时
-- **现象**：白天好好的，放一会儿再问就 120s 超时。
-- **原因**：kagent controller 的唤醒竞态——检查时还在跑，等路由时已 SUSPENDED，于是干等。
-- **处理**：`images/controller-fix/` 提供补丁镜像（可达性等待中若变 SUSPENDED 就再唤醒），附恢复官方镜像的命令。
+## 11. 请求撞上休眠就超时 / `ResumeActor` 报 `DeadlineExceeded`
+两个不同的问题，症状都是"消息发不出去"：
+
+**(a) 唤醒竞态**（`kagent-resume-race.patch` 修的）
+- **现象**：第二条消息卡住；或第一条在 Actor 正在 checkpoint 时到达。
+- **原因**：请求到达时 Actor 正处于 `SUSPENDING`（上一轮结束的 checkpoint 还没做完），
+  kagent 只检查一次状态，看到不是 `RUNNING` 就放弃，不会重新唤醒。
+- **处理**：打 `kagent-resume-race.patch`（仓库根目录），补丁做两件事：
+  请求撞上 `SUSPENDING` 时等它落定再显式 `ResumeActor`；可达性等待中发现变 `SUSPENDED` 就再唤醒一次。
+  构建方式见 `images/controller-fix/`。
+
+**(b) 30s 超时**（补丁修不了）
+- **现象**：`ResumeActor` 正好 29.998s 后失败，`workflow failed at step CallAteletRestore:
+  while creating workload from golden snapshot: context canceled`。
+- **原因**：kagent 里对 resume 有硬编码的 **30s** 上限；慢硬件上"从 golden 重建 actor"
+  （restore + 沙箱创建 + dsh 启动）会超过 30s。macOS 上整套 5~8s 所以从不触发。
+- **处理**：需要改 kagent 源码放宽超时后重编 controller（和上面的补丁一起做）。
 
 ## 12. 长回复被截断 / 面板报"连接中断"
 - **现象**：输出到一半停了；30 秒左右最常见。

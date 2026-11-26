@@ -88,24 +88,40 @@ substrate 的 Actor 是「每轮对话结束就挂起、下轮恢复」的。挂
 
 > 一句话：**平台影响"跑得快不快"，磁盘影响"挂起/恢复快不快"。** 这是两件事。
 
-### 实测：慢在磁盘，不在平台
+### 实测：磁盘约 60%，其余是 CPU 逐页序列化
 
-jinye（VMware 虚机）实测：
+**jinye（VMware 虚机，134M 快照）：**
 
 ```
-checkpoint = 8.8s
-restore    = 11s
-
-节点磁盘写速（dd 直写 134M）：
-  写 26.6 MB/s   ← 极慢（SSD 应有几百 MB/s，HDD 也有 100+ MB/s）
-  读 67.7 MB/s
-  盘 = /dev/mapper/ubuntu--vg-ubuntu--lv（VMware 虚拟盘）
-
-对账：134M @ 26.6 MB/s = 5.0s  ← 快照写盘占了 checkpoint 的大头
+checkpoint:  磁盘 8.8s  →  tmpfs 3.5s     （去掉磁盘省 5.3s ≈ 60%）
+restore:     磁盘 11s   →  tmpfs 6.8s
+节点磁盘:     写 26.6 MB/s、读 67.7 MB/s（dd 直写，VMware 虚拟盘）
 ```
 
-对比 macOS/OrbStack 的 0.8s：不是它「有 KVM」或「是 arm64」，而是**它的磁盘（Apple Silicon NVMe）
-读写 134M 只要零点几秒**，jinye 的 VMware 虚盘要 5 秒。
+**macOS / OrbStack（arm64，同一份 runsc CLI 直测，不经过 kagent/substrate）：**
+
+```
+checkpoint 134M = 160ms   ← 落盘，不是 tmpfs
+```
+
+**所以差异拆成两部分：**
+
+| 部分 | 占比 | 依据 |
+|---|---|---|
+| 磁盘 I/O | **~60%** | 8.8s → 3.5s（tmpfs 实测），134M @ 26.6 MB/s ≈ 5s |
+| CPU 逐页序列化 | **~40%** | 3.5s 远大于纯 memcpy 的 0.1s（1378 MB/s 实测），且 tmpfs 已排除磁盘 |
+
+> **注意：剩下那 40% 不是"内存带宽"。** jinye 单线程 memcpy 1378 MB/s，134M 只要 0.1s；
+> 而 checkpoint 要 3.5s，慢 35 倍 —— 说明瓶颈是 gVisor **逐页走页表/编码状态**的 CPU 开销，
+> 不是带宽。Apple Silicon 单核强，所以 macOS 只要 160ms。
+
+### 参考延迟构成（macOS 实测，来自现场文档）
+
+```
+快照恢复约 0.3s + 模型约 3s + 控制面恢复与建路由约 4–5s  →  端到端 5–8s
+```
+
+jinye 上光是快照恢复就要 6.8~11s（是 macOS 的 20~35 倍），所以端到端会到 30~60s。
 
 ### 怎么优化（按性价比）
 
@@ -123,6 +139,7 @@ restore    = 11s
 |---|---|
 | 一个 x86 K8s 集群 | 能装 CRD，有默认 StorageClass |
 | **节点磁盘要快**（SSD/NVMe） | **checkpoint/restore 的瓶颈在磁盘，见上一节** |
+| **WorkerPool 至少 3 副本** | 每个 Actor 挂起/恢复期间占着一个 worker，1 个副本必然排队 → `no free workers` |
 | 一个 DCE 环境 | 身份、权限、集群托管都来自 DCE；没有就先跑 `make mock-dce` |
 | 能拉 `release-ci` 镜像 | 集群节点要能匿名拉 `release-ci.daocloud.io`（已公开） |
 | DeepSeek 模型 Key | 放 `secrets/.env.secret`，不进 git |
