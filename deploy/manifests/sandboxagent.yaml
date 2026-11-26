@@ -29,21 +29,17 @@ spec:
       securityContext:
         runAsUser: 0
         runAsGroup: 0
-      # egress 网关用自己的 CA 签发证书；Actor 必须信任它，否则模型调用 TLS 失败（TRANSPORT）
-      volumes:
-        - name: egress-trust
-          configMap: {name: egress-trust}
-      volumeMounts:
-        - name: egress-trust
-          mountPath: /run/kagent/egress
-          readOnly: true
+      # egress 网关（atenet-router）用它自己的 CA 签发证书做 TLS 终止。
+      # kagent beta6 不会把 byo.deployment.volumes 传给 ActorTemplate，
+      # 所以 trust bundle 挂不进沙箱 —— 改成把 CA 烤进 dsh-a2a 镜像
+      # （/opt/dsh-a2a/egress-ca.pem，见 scripts/build.sh 的 CA 步骤）。
       env:
         - name: NODE_EXTRA_CA_CERTS
-          value: /run/kagent/egress/trust-bundle.pem
+          value: /opt/dsh-a2a/egress-ca.pem
         - name: SSL_CERT_FILE
-          value: /run/kagent/egress/trust-bundle.pem
+          value: /opt/dsh-a2a/egress-ca.pem
         - name: CURL_CA_BUNDLE
-          value: /run/kagent/egress/trust-bundle.pem
+          value: /opt/dsh-a2a/egress-ca.pem
         - name: DSH_PERMISSION_MODE
           value: danger-full-access
         - name: DSH_REASONING_EFFORT

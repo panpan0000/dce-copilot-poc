@@ -18,3 +18,6 @@ RUN chmod 0755 /opt/dsh-a2a/start.sh /usr/local/bin/dce /usr/local/bin/dce-bin \
 USER 10001
 EXPOSE 80
 ENTRYPOINT ["/bin/sh", "/opt/dsh-a2a/start.sh"]
+
+# egress 网关 CA：沙箱访问 api.deepseek.com 时走 atenet-router，它用自己的 CA 终止 TLS
+COPY egress-ca.pem /opt/dsh-a2a/egress-ca.pem

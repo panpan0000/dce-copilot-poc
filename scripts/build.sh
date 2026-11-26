@@ -22,6 +22,11 @@ cp "$REPO_ROOT"/images/dsh-a2a/*.js "$CTX_DSH"/
 cp "$REPO_ROOT"/images/dsh-a2a/*.sh "$CTX_DSH"/
 cp "$REPO_ROOT"/images/dsh-a2a/dce "$CTX_DSH"/dce
 cp "$REPO_ROOT"/images/dsh-a2a/Dockerfile "$CTX_DSH"/
+# egress 网关的 CA 烤进镜像（kagent beta6 不传 volumes，信任链只能进镜像）
+if kubectl -n ate-system get cm ateapi-ca >/dev/null 2>&1; then
+  kubectl -n ate-system get cm ateapi-ca -o jsonpath='{.data.ca\.crt}' > "$CTX_DSH"/egress-ca.pem
+  log "egress CA 已放入 dsh-a2a 构建上下文"
+fi
 
 # 1a) dce CLI：按目标架构下载官方 release，校验 sha256
 DCE_CLI_VERSION="${DCE_CLI_VERSION:-$DCE_SKILLS_VERSION}"
