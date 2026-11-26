@@ -190,6 +190,25 @@ TOKEN_FILE=~/token.txt make verify
 
 > 完整 9 项 `make verify` 需用当前有效 token 重跑；核心链路（身份 + 对话 + 面板 + 出网）已实测通过。
 
+## 已知限制（没 KVM 时）
+
+如果节点没有 `/dev/kvm`（见「性能前提」），当前的实测表现是：
+
+| 场景 | 表现 |
+|---|---|
+| 新会话第 1 条消息 | 30~50 秒（冷启动 + 软件快照） |
+| 同一会话第 2 条 | 有时 5~7 秒（Actor 仍热），有时超时（已挂起，又要软件恢复） |
+| 连续多条 | 容易 `no free workers`（worker 被慢恢复占住） |
+
+**这不是代码 bug**，是 systrap 的固有开销。开 KVM 后恢复到 3~5 秒/条。
+
+在没有 KVM 的环境里演示时建议：**一个会话连续聊、别频繁点"新会话"**；变慢就重启 worker 清状态：
+
+```bash
+kubectl -n kagent delete pod -l ate.dev/worker-pool=kagent-default --grace-period=0 --force
+ssh <worker-node> 'rm -rf /var/lib/ateom-gvisor/actors/*'
+```
+
 ## 已经解决过的问题（不需要你再踩）
 
 | 问题 | 结论 |
