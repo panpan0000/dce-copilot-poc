@@ -178,6 +178,14 @@
   为了绕开 `mount(2)` 单页选项串上限（约 34 层），它用的是 `lowerdir+` 这个 key。
   `lowerdir+` 需要 **Linux 6.7+，或回填到 6.6.23+**；Ubuntu 22.04 默认 5.15 没有。
   （代码注释见 `internal/imagecache/bundle_linux.go` 的 `mountOverlay`。）
+- **上游依据（已核对，不是推测）**：
+  - substrate `v1.0.0` 的 `internal/imagecache/README.md:161` 原文：
+    "**Minimum supported kernel: Linux 6.7, or 6.6.23** (`lowerdir+`, backported to 6.6.y)"。
+  - 当前 `main` 分支同文件同一行仍是这句话，`bundle_linux.go` 仍然只有 `set("lowerdir+")`，
+    **没有 mount(2) 回退分支**（grep 过 `fallback|mount(2)|legacy`，无）。
+  - 代码里**没有启动时的内核版本检查**（grep 不到 `uname`/`kernelVersion` 门禁），所以是
+    fail-late：装得上、跑得起来，只在第一次组 rootfs 时炸一个裸 `EINVAL`。
+  - 上游 quickstart 没写这个前置条件（只提了内核邻居表），所以只能自己踩出来。
 - **定位方法（别再猜内核）**：在节点上起一个 privileged + hostPath 的 pod，跑一个探针程序，
   用 `fsopen/fsconfig/fsmount` 分别试 `lowerdir` 和 `lowerdir+`：
   ```
