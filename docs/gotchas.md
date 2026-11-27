@@ -122,3 +122,78 @@
 - **现象**：要"巡检报告"，结果 Agent 自己用 kubectl 拼了一份。
 - **原因**：提示词把 SRE 当"可选项"，而沙箱里又有 dce CLI 和诊断 skill。
 - **处理**：preamble 写成规则——报告必须来自 `sre-cli report`；自检必须声明"不是 SRE 报告"。
+
+## 17. kagent 1.0：`Agent` 卡在 `waiting for the ActorTemplate golden snapshot`
+- **现象**：`kubectl -n kagent get agent <name>` 一直 `Ready=False`，
+  message = `waiting for the ActorTemplate golden snapshot`，`reason` 在
+  `ActorTemplatePending` / `ActorTemplateRetrying` 之间跳。
+- **先纠正一个误区**：`ActorTemplate` **不是 K8s CRD**（`kubectl get actortemplates` 会报
+  `the server doesn't have a resource type`）。它是 substrate 的 gRPC 对象，存在 ate-api 的
+  PostgreSQL 里（`substrate.actor_templates`）。K8s 侧只有 `sandboxtemplates.api.kagent.dev`（另一条路径）。
+- **排查顺序**（从下游往上游，不要猜）：
+  1. `kubectl -n ate-system logs deploy/ate-api-server --since=15m | grep -v "Handle RPC"`
+     —— 看有没有 `Failed to reconcile actor template, requeueing`。有的话 `err` 字段就是根因。
+  2. `kubectl -n kagent exec <postgres-pod> -c postgresql -- psql -U postgres -d kagent \
+     -c "select * from substrate.actor_templates;"` —— 模板是否创建（`proto` 里含 image / revision）。
+     再看 `substrate.leases` 里对应 `lease:actortemplate:<ns>:<name>` 是否一直被续租（说明有 worker 在跑）。
+  3. `kubectl -n ate-system logs <atelet-pod> --since=15m` —— 真正干活的是 atelet（node agent），
+     它的 `Atelet/Run` 响应里的 `err` 字段才是第一手信息。
+  4. kagent-controller 侧每秒一次 `GetActorTemplate`，`status` 为空一直等，是**症状不是原因**。
+- **实测遇到的两类根因**：镜像拉不下来（见 #18）、内核不支持 overlayfs 新 API（见 #19）。
+
+## 18. 国内集群拉不到 ghcr 镜像 → golden 快照永远建不完
+- **现象**：atelet 反复
+  `while creating "kagent" OCI bundle: in imageCache.EnsureImage("ghcr.io/...@sha256:..."): while waiting for pull of ...: context canceled`，
+  每轮耗时精确 `4m59.98s`。
+- **原因**：atelet 自己拉镜像（不复用 containerd），而 ata-api 侧那一步硬超时 **5 分钟**。
+  实测 jinye 拉 ghcr.io 的 blob 只有 **39 KB/s**（65MB 镜像要 20+ 分钟），所以永远拉不完。
+  注意 `curl https://ghcr.io/v2/` 返回 401 只证明 API 可达，**不代表能拉层**。
+- **处理（在集群内做镜像中转，节点走内网）**：
+  1. 集群内起一个 `registry:2`（HTTP）：
+     `kubectl -n kagent apply -f` 一个 Deployment+Service `registry:5000`（存储用 emptyDir，重启会丢，POC 够用）。
+  2. 在能出网的机器上用 `crane` 把镜像按 **amd64 子 manifest 的 digest** 推进去
+     （`--platform linux/amd64` 会把子 manifest 推到 index 的 digest 下，必然报
+     `DIGEST_INVALID`，所以要显式用子 digest）：
+     ```bash
+     kubectl -n kagent port-forward svc/registry 5000:5000 &
+     crane copy --platform linux/amd64 \
+       ghcr.nju.edu.cn/kagent-dev/kagent/golang-adk@sha256:<index> \
+       localhost:5000/kagent-dev/kagent/golang-adk@sha256:<amd64-child>
+     ```
+     `ghcr.nju.edu.cn` 是国内可用镜像（实测 2.4 MB/s，55MB 层 22s）。
+  3. 给 atelet 加一条 flag，让它把 `localhost:5000/...` 改写成集群内 Service 并且用明文 HTTP
+     （源码里 `parseRef` 对改写过的 ref 用 `name.Insecure`）：
+     ```bash
+     kubectl -n ate-system patch ds atelet --type=json \
+       -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--localhost-registry-replacement=registry.kagent.svc:5000"}]'
+     ```
+  4. 把 `Harness.spec.workload.image` 改成 `localhost:5000/kagent-dev/kagent/golang-adk@sha256:<amd64-child>`。
+     revision 变了会自动生成新的 `ActorTemplate`，旧的在 `runtime-revision-gc` 里回收。
+- **注意**：`docker pull` + `docker push` 会重建 manifest，digest 对不上；`crane`/`skopeo --all` 才保 digest。
+
+## 19. 内核 5.15 跑不了 substrate 1.0：overlayfs `lowerdir+` 不支持（硬门槛）
+- **现象**：镜像拉取解决后，atelet 报
+  `while calling worker RunWorkload: ... while composing "kagent" rootfs: while mounting overlay rootfs at ".../bundles/kagent/rootfs": while creating overlay superblock: invalid argument`。
+- **原因**：substrate 1.0 用**新挂载 API**（`fsopen`+`fsconfig`+`fsmount`）拼 rootfs，
+  为了绕开 `mount(2)` 单页选项串上限（约 34 层），它用的是 `lowerdir+` 这个 key。
+  `lowerdir+` 需要 **Linux 6.7+，或回填到 6.6.23+**；Ubuntu 22.04 默认 5.15 没有。
+  （代码注释见 `internal/imagecache/bundle_linux.go` 的 `mountOverlay`。）
+- **定位方法（别再猜内核）**：在节点上起一个 privileged + hostPath 的 pod，跑一个探针程序，
+  用 `fsopen/fsconfig/fsmount` 分别试 `lowerdir` 和 `lowerdir+`：
+  ```
+  plain lowerdir            OK
+  plain lower+upper         OK
+  lowerdir+ single          create: invalid argument
+  lowerdir+ pair            create: invalid argument
+  ```
+  这就把「内核不支持」和「目录/权限不对」彻底分开了。
+- **必须满足的前置条件**：**节点内核 ≥ 6.6.23（建议 6.8）**。
+  Ubuntu 22.04 升级路径：
+  ```bash
+  # 在节点上（可用 privileged pod chroot /host 执行）
+  apt-get update && apt-get install -y linux-generic-hwe-22.04
+  update-grub && reboot        # 保留 5.15 作为 grub 回退项
+  ```
+  重启后 `kubectl get node -o wide` 确认 `KERNEL` 变成 6.8.x，kagent 会自动重试 golden 快照。
+- **不要**为了绕这个去改 substrate 源码回退 `mount(2)`：层数一多就会撞页面大小限制，
+  而且下游升级要一直背这个补丁。

@@ -234,7 +234,29 @@ TOKEN_FILE=~/token.txt make verify
 
 ## ⚠️ 已知限制与版本结论（重要，先看这个）
 
-### 核心结论：版本旧 + gVisor 在 VMware 上不稳
+### 前置条件：节点内核必须 ≥ 6.6.23（substrate 1.0 硬门槛）
+
+substrate 1.0 用新挂载 API（`fsopen`/`fsconfig`/`fsmount`）拼沙箱 rootfs，靠 `lowerdir+`
+绕开 `mount(2)` 的单页选项上限；`lowerdir+` 需要 **Linux 6.7+ 或 6.6.23+**。
+Ubuntu 22.04 默认 5.15 **跑不起来**，症状是 `Agent` 卡在
+`waiting for the ActorTemplate golden snapshot`，atelet 报
+`while creating overlay superblock: invalid argument`。
+
+已在 jinye 节点上用 `fsopen/fsconfig` 探针实测：`plain lowerdir` OK、`lowerdir+` 必然 `EINVAL`。
+升级方式（Ubuntu 22.04，保留 5.15 作为 grub 回退）：
+
+```bash
+apt-get update && apt-get install -y linux-generic-hwe-22.04
+update-grub && reboot
+kubectl get node -o wide          # KERNEL 应为 6.8.x
+```
+
+另外：国内集群拉 `ghcr.io` 只有 ~39KB/s，而 atelet 拉镜像这一步硬超时 5 分钟。
+需要在集群内做镜像中转（`registry:2` + `crane` 保 digest 推送 + atelet 的
+`--localhost-registry-replacement`）。完整步骤见
+[docs/gotchas.md](docs/gotchas.md) 的 #17 / #18 / #19。
+
+### 核心结论（旧版本 0.0.8）：版本旧 + gVisor 在 VMware 上不稳
 
 这套 POC 用的 substrate **0.0.8** + kagent **0.10.0-beta6** 是老版本；当前 substrate 已到 0.6.x、kagent 已到 1.0.x。
 
@@ -262,10 +284,15 @@ TOKEN_FILE=~/token.txt make verify
 
 ```bash
 kubectl -n ate-system rollout restart deploy/atenet-router
-kubectl -n kagent delete actortemplate --all --ignore-not-found
+# 重新触发 golden 快照：改 Harness 的 image（或删了重建 Agent），revision 变了会自动新建 ActorTemplate
+kubectl -n kagent delete agent <name> && kubectl apply -f <agent>.yaml
 kubectl -n kagent delete pod -l ate.dev/worker-pool=kagent-default --grace-period=0 --force
-ssh <worker-node> 'rm -rf /var/lib/ateom-gvisor/actors/*'
+ssh <worker-node> 'rm -rf /var/lib/ate/actors/*'
 ```
+
+> 注意：`ActorTemplate` **不是 K8s CRD**，`kubectl delete actortemplate` 会报
+> `the server doesn't have a resource type`；它是 substrate 的 gRPC 对象，存在
+> ate-api 的 PostgreSQL（`substrate.actor_templates`）里。
 
 ## 已经解决过的问题（不需要你再踩）
 
@@ -273,7 +300,7 @@ ssh <worker-node> 'rm -rf /var/lib/ateom-gvisor/actors/*'
 |---|---|
 | Actor 起不来 / `no free workers` | WorkerPool 必须设 `template.resources.limits.memory`，否则 worker 容量算成 0 |
 | 沙箱起不来，`runsc` 资产拉不到 | gVisor 的 runsc 从 `gs://gvisor` 下载，出不了网就失败；离线环境要本地化 |
-| golden snapshot 一直不就绪 | Actor 镜像必须监听 `:8081/readyz`（kagent 硬编码的探针） |
+| golden snapshot 一直不就绪 | Actor 镜像必须监听 `:8081/readyz`（kagent 硬编码的探针）；kagent 1.0 另有两类根因：镜像拉不下来（见 gotchas #18）、内核 <6.6.23 不支持 overlayfs `lowerdir+`（见 #19） |
 | 沙箱里模型报 `no API key` | 凭据用新版格式 `version:1 + refs:`，且补 `DEEPSEEK_API_KEY` env |
 | 沙箱里模型报 `TRANSPORT` | 根因是 gVisor systrap 在 VMware 上 sentry 崩溃（见上节），非 DNS/证书/egress；建议升级 |
 | 请求撞上 Actor 休眠就超时 | controller 打了唤醒竞态补丁（`images/controller-fix/`） |
