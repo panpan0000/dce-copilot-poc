@@ -7,6 +7,33 @@ Agent 用这个用户自己的身份调用 DCE API 和 kubectl。
 > 共享一套集群和模型，但每个用户的 Agent 有自己的文件系统、自己的进程、自己的身份。
 > 不是「一个 Agent 服务所有人」，而是「每人生成一个 Agent，用完即挂起」。
 
+---
+
+## ⛔️ 先说限制：substrate 1.0 / kagent 1.0 的硬门槛
+
+新栈（substrate **1.0.0** + kagent **1.0.0**）解决了旧栈的 gVisor 稳定性问题，但把环境门槛抬高了。
+**这四条任一不满足，`Agent` 会一直 `Ready=False`，而且报错都指向错误的方向**：
+
+| 门槛 | 要求 | 不满足时你会看到 | 能绕过吗 |
+|---|---|---|---|
+| **内核** | **≥ 6.6.23**（Ubuntu 22.04 默认 5.15 不行） | `Agent` 卡在 `waiting for the ActorTemplate golden snapshot`；atelet 报 `while creating overlay superblock: invalid argument` | ❌ 不能，上游无回退分支 |
+| **K8s** | **≥ 1.37** | substrate 起不来（缺 `PodCertificateRequest` / `ClusterTrustBundle`） | ❌ 不能，且必须逐个小版本升 |
+| **Helm** | **3.x** | `kagent install` 报 `rendered controller deployment has no service account` | ✅ 降到 Helm 3.22 |
+| **镜像可达** | 集群能拉 `ghcr.io/kagent-dev/*` | atelet 每轮**精确 5 分钟**超时：`imageCache.EnsureImage(...): context canceled` | ✅ 集群内 `registry:2` 中转 |
+
+两条最容易踩的细节：
+
+- **`ActorTemplate` 不是 K8s CRD**。它是 substrate 的 gRPC 对象，存在 ate-api 的 PostgreSQL 里。
+  `kubectl get actortemplates` 只会告诉你「没有这个资源类型」，别在那儿找问题。
+- **`curl https://ghcr.io/v2/` 返回 401 不等于能拉镜像**。要测 blob 的实际速度：国内实测 **39 KB/s**，
+  65MB 镜像要 20+ 分钟，而 atelet 拉镜像这一步硬超时 5 分钟。
+
+完整的新栈说明、安装顺序、镜像中转脚本、验证清单见 **[docs/substrate-1.0.md](docs/substrate-1.0.md)**；
+逐条排查过程见 [docs/gotchas.md](docs/gotchas.md) 的 #17 / #18 / #19。
+
+> 只升级**承载 worker 的节点**的内核。如果 GPU 节点和 master 是同一台（本集群就是），
+> **不要动它**：vGPU/GRID 驱动对内核版本敏感，换内核要重装驱动。
+
 一张表说清区别：
 
 | | 共享 Copilot | **BYOA（本项目）** |

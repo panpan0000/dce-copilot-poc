@@ -1,0 +1,166 @@
+# 新版本踩坑：substrate 1.0 + kagent 1.0
+
+> 这份文档只讲**新栈**（substrate 1.0.0 / kagent 1.0.0）和旧栈（0.0.8 / 0.10.0-beta6）的差异与限制。
+> 旧栈的问题看 [gotchas.md](gotchas.md)；新栈的逐条排查过程看 gotchas 的 #17 / #18 / #19。
+
+## 一句话结论
+
+新栈解决的是旧栈「gVisor systrap 在 VMware 上崩 → `TRANSPORT`」那类问题，
+但它把**运行环境门槛**抬高了：**内核 ≥ 6.6.23、K8s ≥ 1.37、Helm 3**，且**镜像必须能在集群内拉得动**。
+这三条任何一条不满足，`Agent` 会一直 `Ready=False`，而且报错信息都指向错误的方向。
+
+## 一、硬性前置条件（不满足就别开始）
+
+| 条件 | 要求 | 不满足的症状 | 能否绕过 |
+|---|---|---|---|
+| **内核** | **≥ 6.6.23**（建议 6.8） | `atelet` 报 `while creating overlay superblock: invalid argument`；`Agent` 卡在 `waiting for the ActorTemplate golden snapshot` | ❌ 不能。上游明确写死，无回退分支 |
+| **K8s** | **≥ 1.37** | substrate 1.0 依赖 `PodCertificateRequest`、`ClusterTrustBundle`、`certificates.k8s.io/v1beta1` | ❌ 不能（kubeadm 也不能一跳，必须 1.34→1.35→1.36→1.37 逐级） |
+| **Helm** | **3.x**（不是 4.x） | `kagent install` 报 `rendered controller deployment has no service account` / `invalid Helm values` | ✅ 降级 Helm 到 3.22 即可 |
+| **镜像可达** | 集群能拉 `ghcr.io/kagent-dev/...` | atelet 每轮精确 5 分钟超时：`imageCache.EnsureImage(...): while waiting for pull ...: context canceled` | ✅ 集群内镜像中转（见第三节） |
+| **模型 provider** | kagent CLI 的 provider 枚举里**没有 DeepSeek** | `kagent install` 报 `OPENAI_API_KEY is not set` | ✅ 用 OpenAI 兼容的 `ModelConfig` + `openAI.baseUrl` 指到 DeepSeek |
+
+内核门槛的上游原文（`substrate` `v1.0.0` 与当前 `main` 同一行，`internal/imagecache/README.md:161`）：
+
+> **Minimum supported kernel: Linux 6.7, or 6.6.23** (`lowerdir+`, backported to 6.6.y)
+
+Ubuntu 22.04 升级（**并存安装，5.15 保留在 grub 里做回退**）：
+
+```bash
+apt-get update && apt-get install -y linux-generic-hwe-22.04   # 装到 6.8.x
+update-grub            # 包本身会触发；确认 6.8 的 menuentry 在 5.15 之前
+reboot
+kubectl get node -o wide     # KERNEL 应变成 6.8.x
+```
+
+> ⚠️ **只升承载 worker 的节点**。如果 GPU 节点和 master 是同一台，不要动它：
+> vGPU/GRID 驱动对内核版本敏感，换内核要重装驱动，风险远大于收益。
+
+## 二、新栈的 API 形状（和 0.10 完全不一样）
+
+`api.kagent.dev/v1alpha3` 把「运行时」和「Agent 定义」拆开了：
+
+| 对象 | 作用 | 关键字段 |
+|---|---|---|
+| `Harness` | 运行时：跑在哪个 worker 池、用什么镜像、快照存哪 | `spec.workload.image`、`spec.substrate.workerPoolRef`、`spec.substrate.snapshotPolicy.location` |
+| `AgentTemplate` | 模型 + 系统提示词 | `spec.modelConfig`、`spec.systemPrompt` |
+| `Agent` | 把上面两个「组装」起来 | `spec.template.ref` + `spec.harnessRef` |
+
+旧栈的 `SandboxAgent` / `Agent`（0.10）写法和这些**不兼容**，`substrate-adapter` 之类的组件要跟着改。
+
+> 注意：`ActorTemplate` **不是 K8s CRD**。它是 substrate 的 gRPC 对象，落在 ate-api 的
+> PostgreSQL（`substrate.actor_templates` 表）。`kubectl get actortemplates` 会直接报
+> `the server doesn't have a resource type`，别再在那儿找。
+
+`Agent` 的 condition 依次是：`Accepted` → `EgressPoliciesApplied` → `ResolvedRefs` → `Compatible` → `Ready`。
+前四个都是 `True` 而 `Ready=False: waiting for the ActorTemplate golden snapshot`，说明**配置没问题，是运行时（substrate/atelet/内核）的问题**。
+
+## 三、国内集群：镜像拉不动是必踩的一关
+
+atelet **自己拉镜像**（不复用 containerd 的镜像存储），而 ate-api 那一步硬超时 **5 分钟**。
+实测 jinye 到 `ghcr.io` 的 blob 只有 **39 KB/s**，65MB 的镜像要 20 多分钟 → 永远拉不完。
+
+> 判别技巧：`curl https://ghcr.io/v2/` 返回 401 只证明「API 可达」，**不代表层能拉下来**。
+> 一定要测 blob 的实际速度。
+
+推荐做法：集群内起一个 `registry:2`（HTTP），节点走内网拉。
+
+```bash
+# 1) 集群内 registry（POC 用 emptyDir 即可，但重启会丢镜像，见下方注意）
+kubectl -n kagent apply -f - <<'EOF'
+apiVersion: apps/v1
+kind: Deployment
+metadata: {name: local-registry, namespace: kagent}
+spec:
+  replicas: 1
+  selector: {matchLabels: {app: local-registry}}
+  template:
+    metadata: {labels: {app: local-registry}}
+    spec:
+      containers:
+      - name: registry
+        image: registry:2.8.3
+        ports: [{containerPort: 5000}]
+---
+apiVersion: v1
+kind: Service
+metadata: {name: registry, namespace: kagent}
+spec:
+  selector: {app: local-registry}
+  ports: [{port: 5000, targetPort: 5000}]
+EOF
+
+# 2) 用 crane 按「amd64 子 manifest 的 digest」推（docker pull/push 会重建 manifest，digest 对不上）
+kubectl -n kagent port-forward svc/registry 5000:5000 &
+crane copy --platform linux/amd64 \
+  ghcr.nju.edu.cn/kagent-dev/kagent/golang-adk@sha256:<index-digest> \
+  localhost:5000/kagent-dev/kagent/golang-adk@sha256:<amd64-child-digest>
+
+# 3) 让 atelet 把 localhost:5000 改写成集群内 Service，并用明文 HTTP
+kubectl -n ate-system patch ds atelet --type=json \
+  -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--localhost-registry-replacement=registry.kagent.svc:5000"}]'
+
+# 4) Harness 的镜像改成内网地址
+kubectl -n kagent patch harness <name> --type=merge \
+  -p '{"spec":{"workload":{"image":"localhost:5000/kagent-dev/kagent/golang-adk@sha256:<amd64-child-digest>"}}}'
+```
+
+几个坑：
+
+- `--platform linux/amd64` + 目标写 **index digest** → 必然 `DIGEST_INVALID`。目标要写 **amd64 子 manifest 的 digest**。
+- `registry:2` 用 `emptyDir` 时，**节点重启/registry Pod 重建后镜像就没了**，要重推一次；
+  长期用改成 hostPath 或给个 PVC。
+- `ghcr.nju.edu.cn` 是本次实测可用的国内镜像（2.4 MB/s）；`ghcr.dockerproxy.com` 超时，`ghcr.geekery.cn` 域名不解析。
+
+## 四、安装顺序与版本对齐
+
+`kagent` CLI 1.0.1 的安装顺序是固定的：
+`kagent-crds → substrate-crds → podcert → bundled postgres → substrate → atelet → kagent`。
+手工 `helm install` 时也必须按这个顺序，否则 controller 起不来（缺 CRD / 缺 cert 签发的 signer）。
+
+版本对照：
+
+| 组件 | 本次验证的版本 |
+|---|---|
+| Kubernetes | 1.37.3 |
+| substrate chart | 1.0.0 |
+| kagent chart | 1.0.0 |
+| kagent CLI | 1.0.1 |
+| Helm | 3.22.1（**4.x 会挂**） |
+| 内核 | 6.8.0-40（升级前 5.15 跑不了） |
+
+## 五、验证清单（怎么判断这栈是真的通了）
+
+```bash
+# 1) 控制面
+kubectl -n ate-system get pods          # ate-api-server / ate-controller / atelet / atenet-* 全 Running
+kubectl -n kagent   get pods            # controller / worker / postgresql / tools / ui 全 Running
+
+# 2) Agent 对象
+kubectl -n kagent get agent <name> -o jsonpath='{.status.conditions[?(@.type=="Ready")]}'
+# 期望：Ready=True, message=ActorTemplate golden snapshot is ready
+
+# 3) golden 快照真的建出来了（看 PG，不是看 K8s）
+kubectl -n kagent exec <postgres-pod> -c postgresql -- psql -U postgres -d kagent \
+  -c "select atespace, name, version from substrate.actor_templates;"
+
+# 4) 真跑一条对话
+kagent agent invoke ... / 或走 kagent UI
+```
+
+状态字段含义：
+
+| `Ready.reason` | 含义 | 该看哪 |
+|---|---|---|
+| `ActorTemplatePending` / `ActorTemplateRetrying` | 正在建 golden 快照 / 建失败在重试 | ate-api-server 日志 + atelet 日志（gotchas #17） |
+| `Ready` | 快照就绪 | 可以对话了 |
+
+## 六、还没验证 / 已知限制
+
+- **GPU 没参与**：本次集群的 GPU（Tesla-P4 **vGPU**）在 master 上，且 master 带 `demo` +
+  `node.kubernetes.io/disk-pressure` 两条 taint，`nvidia.com/gpu` 的 capacity **是 0**——
+  也就是说这个「GPU 集群」目前对 K8s 是 0 张卡可用。整套 POC 走的是 CPU + gVisor，不依赖 GPU。
+- **真实对话链路尚未在这套新栈上重跑**：`substrate-adapter` 还停在 kagent 0.10 的 API，
+  要迁到 1.0 的 `Harness/AgentTemplate/Agent` 才能端到端。
+- **快照存储**：`snapshotPolicy.location` 指向集群内 rustfs（`s3://ate-snapshots/...`），
+  不是云对象存储；换环境要改。
+- **`registry:2` 是 POC 级**：单副本 + emptyDir，没有 GC、没有 TLS、没有认证。
