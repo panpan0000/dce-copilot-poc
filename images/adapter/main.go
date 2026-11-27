@@ -27,6 +27,7 @@ import (
 	"net/http"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -209,14 +210,171 @@ func identityOf(sub, preferred string) string {
 	return sub
 }
 
+// ---- kagent 1.0：会话映射 ----------------------------------------------
+// 0.10 的适配器直接把 contextId 当成"由身份推导的会话 id"传给上游。
+// 1.0 里 Session 由服务端创建，ContextId 也是服务端生成的 UUID，调用方只能引用。
+// 所以这里维护 sid(本地推导) -> contextId(上游) 的映射，并落盘，避免适配器重启后
+// 同一个会话被拆成两个沙箱（历史丢失）。
+var (
+	sessionMapPath = env("SESSION_MAP_FILE", "/data/adapter-sessions.json")
+	sessionMapMu   sync.Mutex
+	sessionMap     = map[string]string{}
+)
+
+func loadSessionMap() {
+	raw, err := os.ReadFile(sessionMapPath)
+	if err != nil {
+		return
+	}
+	var m map[string]string
+	if json.Unmarshal(raw, &m) == nil {
+		sessionMapMu.Lock()
+		sessionMap = m
+		sessionMapMu.Unlock()
+		log.Printf("loaded %d session mappings from %s", len(m), sessionMapPath)
+	}
+}
+
+func sessionMapGet(sid string) string {
+	sessionMapMu.Lock()
+	defer sessionMapMu.Unlock()
+	return sessionMap[sid]
+}
+
+func sessionMapSet(sid, contextID string) {
+	if sid == "" || contextID == "" {
+		return
+	}
+	sessionMapMu.Lock()
+	defer sessionMapMu.Unlock()
+	if sessionMap[sid] == contextID {
+		return
+	}
+	sessionMap[sid] = contextID
+	raw, err := json.Marshal(sessionMap)
+	if err != nil {
+		return
+	}
+	tmp := sessionMapPath + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o600); err == nil {
+		_ = os.Rename(tmp, sessionMapPath)
+	}
+	log.Printf("session mapping %s -> %s", sid, contextID)
+}
+
+// applyContext 按上游实际存在的会话设置/清除 contextId。
+// ctx 为空表示"这条会话在上游还没有"：此时必须删掉 contextId，让上游新建 Session。
+func applyContext(body []byte, ctx string) ([]byte, error) {
+	var doc map[string]any
+	if err := json.Unmarshal(body, &doc); err != nil {
+		return nil, err
+	}
+	params, ok := doc["params"].(map[string]any)
+	if !ok {
+		return nil, errors.New("missing params")
+	}
+	if ctx == "" {
+		delete(params, "contextId")
+	} else {
+		params["contextId"] = ctx
+	}
+	if msg, ok := params["message"].(map[string]any); ok {
+		if ctx == "" {
+			delete(msg, "contextId")
+		} else {
+			msg["contextId"] = ctx
+		}
+		// A2A 1.0 用枚举 ROLE_USER；0.3 的 "user" 会被上游判为 unspecified。
+		msg["role"] = "ROLE_USER"
+	}
+	// 0.3 的方法名到 1.0 的映射（kagent 1.0 只服务 A2A 1.0）。
+	switch doc["method"] {
+	case "message/send":
+		doc["method"] = "SendMessage"
+	case "message/stream":
+		doc["method"] = "SendStreamingMessage"
+	}
+	return json.Marshal(doc)
+}
+
+// a2aContextID 从 JSON-RPC 响应/流事件里取上游会话 id（Task/状态事件都带 contextId）。
+func a2aContextID(raw []byte) string {
+	var doc struct {
+		Result map[string]any `json:"result"`
+	}
+	if json.Unmarshal(raw, &doc) != nil || doc.Result == nil {
+		return ""
+	}
+	if v, ok := doc.Result["contextId"].(string); ok && v != "" {
+		return v
+	}
+	for _, k := range []string{"task", "statusUpdate", "artifactUpdate"} {
+		if inner, ok := doc.Result[k].(map[string]any); ok {
+			if v, ok := inner["contextId"].(string); ok && v != "" {
+				return v
+			}
+		}
+	}
+	return ""
+}
+
+// a2aEvent 解析 A2A 1.0 的一帧：增量文本 / 会话 id / 是否完成。
+func a2aEvent(raw []byte) (delta, ctxID string, done bool) {
+	var doc struct {
+		Result map[string]any `json:"result"`
+	}
+	if json.Unmarshal(raw, &doc) != nil || doc.Result == nil {
+		return "", "", false
+	}
+	r := doc.Result
+	ctxID = a2aContextID(raw)
+	if au, ok := r["artifactUpdate"].(map[string]any); ok {
+		if art, ok := au["artifact"].(map[string]any); ok {
+			delta = partsText(art["parts"])
+		}
+	}
+	if t, ok := r["task"].(map[string]any); ok {
+		if st, ok := t["status"].(map[string]any); ok {
+			s, _ := st["state"].(string)
+			done = s == "TASK_STATE_COMPLETED" || s == "TASK_STATE_FAILED" || s == "TASK_STATE_CANCELED"
+		}
+	}
+	if su, ok := r["statusUpdate"].(map[string]any); ok {
+		if st, ok := su["status"].(map[string]any); ok {
+			s, _ := st["state"].(string)
+			if s == "TASK_STATE_COMPLETED" || s == "TASK_STATE_FAILED" || s == "TASK_STATE_CANCELED" {
+				done = true
+			}
+		}
+	}
+	return delta, ctxID, done
+}
+
+func partsText(v any) string {
+	parts, ok := v.([]any)
+	if !ok {
+		return ""
+	}
+	out := ""
+	for _, p := range parts {
+		if m, ok := p.(map[string]any); ok {
+			if t, ok := m["text"].(string); ok {
+				out += t
+			}
+		}
+	}
+	return out
+}
+
 func main() {
 	var (
 		addr     = env("ADAPTER_ADDR", ":9099")
 		jwksPath = env("JWKS_FILE", "/etc/adapter/jwks.json")
 		issuer   = env("JWT_ISSUER", "")
 		audience = env("JWT_AUDIENCE", "")
-		upstream = env("UPSTREAM", "http://kagent-controller.kagent.svc.cluster.local:8083/api/a2a-sandboxes/kagent/substrate-demo/")
+		upstream = env("UPSTREAM", "http://kagent-controller.kagent.svc.cluster.local:8083/agents/kagent/deepseek-agent")
 	)
+	loadSessionMap()
 	v, err := loadVerifier(jwksPath, issuer, audience)
 	if err != nil {
 		log.Fatalf("load jwks: %v", err)
@@ -256,13 +414,11 @@ func main() {
 			http.Error(w, "read body", http.StatusBadRequest)
 			return
 		}
-		rewritten, forged, err := forceSession(body, sid)
+		ctxID := sessionMapGet(sid)
+		rewritten, err := applyContext(body, ctxID)
 		if err != nil {
 			http.Error(w, "invalid json-rpc body: "+err.Error(), http.StatusBadRequest)
 			return
-		}
-		if forged != "" {
-			log.Printf("identity=%s ignored client contextId=%q", id, forged)
 		}
 
 		resp, err := doUpstream(r.Context(), client, upstream, r, id, sid, rewritten)
@@ -276,6 +432,14 @@ func main() {
 		}
 		w.Header().Set("X-Sandbox-Session", sid)
 		w.WriteHeader(resp.StatusCode)
+		if ctxID == "" {
+			raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
+			if c := a2aContextID(raw); c != "" {
+				sessionMapSet(sid, c)
+			}
+			_, _ = w.Write(raw)
+			return
+		}
 		_, _ = io.Copy(w, resp.Body)
 	})
 
@@ -339,72 +503,123 @@ func main() {
 		if kc, kerr := dceKubeconfig(bearerRaw(r)); kerr == nil {
 			parts = append(parts, map[string]any{"kind": "data", "data": map[string]string{"kubeconfig": kc}})
 		}
+		ctxID := sessionMapGet(sid)
 		payload, _ := json.Marshal(map[string]any{
-			"jsonrpc": "2.0", "id": "str-" + sid, "method": "message/stream",
+			"jsonrpc": "2.0", "id": "str-" + sid, "method": "SendStreamingMessage",
 			"params": map[string]any{
-				"contextId": sid,
-				"message": map[string]any{"role": "user", "kind": "message", "contextId": sid,
-					"messageId": "str-" + sid, "parts": parts},
+				"message": map[string]any{"role": "ROLE_USER", "kind": "message",
+					"messageId": "str-" + sid + "-" + strconv.FormatInt(time.Now().UnixNano(), 36), "parts": parts},
 				"configuration": map[string]any{"acceptedOutputModes": []string{"text"}},
 			},
 		})
-		resp, err := doUpstream(r.Context(), client, upstream, r, id, sid, payload)
-		if err != nil {
-			writeJSON(w, 502, map[string]string{"error": "agent unavailable: " + err.Error()})
-			return
+		if ctxID != "" {
+			payload, _ = applyContext(payload, ctxID)
 		}
-		defer resp.Body.Close()
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.Header().Set("Cache-Control", "no-cache")
-		w.Header().Set("X-Sandbox-Session", sid)
-		w.WriteHeader(200)
 		flusher, _ := w.(http.Flusher)
-		emit := func(obj any) {
-			raw, _ := json.Marshal(obj)
-			_, _ = w.Write([]byte("data: " + string(raw) + "\n\n"))
-			if flusher != nil {
-				flusher.Flush()
+		var emit func(any)
+		started := false
+		startStream := func() {
+			if started {
+				return
 			}
-		}
-		sc := bufio.NewScanner(resp.Body)
-		sc.Buffer(make([]byte, 64*1024), 1<<20)
-		for sc.Scan() {
-			line := strings.TrimSpace(sc.Text())
-			if !strings.HasPrefix(line, "data:") {
-				continue
-			}
-			var ev struct {
-				Result struct {
-					Artifacts []struct {
-						Parts []struct {
-							Text string `json:"text"`
-						} `json:"parts"`
-					} `json:"artifacts"`
-					Status struct {
-						State string `json:"state"`
-					} `json:"status"`
-				} `json:"result"`
-				Error any `json:"error"`
-			}
-			if json.Unmarshal([]byte(strings.TrimSpace(strings.TrimPrefix(line, "data:"))), &ev) != nil {
-				continue
-			}
-			if ev.Error != nil {
-				emit(map[string]any{"error": ev.Error})
-				continue
-			}
-			for _, a := range ev.Result.Artifacts {
-				for _, p := range a.Parts {
-					if p.Text != "" {
-						emit(map[string]string{"delta": p.Text})
-					}
+			started = true
+			w.Header().Set("Content-Type", "text/event-stream")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.Header().Set("X-Sandbox-Session", sid)
+			w.WriteHeader(200)
+			emit = func(obj any) {
+				raw, _ := json.Marshal(obj)
+				_, _ = w.Write([]byte("data: " + string(raw) + "\n\n"))
+				if flusher != nil {
+					flusher.Flush()
 				}
 			}
-			if ev.Result.Status.State == "completed" {
-				emit(map[string]any{"done": true, "session_id": sid})
-			}
 		}
-		emit(map[string]any{"done": true, "session_id": sid})
+
+		// 1.0 里新建 Session 需要先把它拉起来（actor 创建），这段时间上游会回
+		// KAGENT_SEND_NOT_ACCEPTED。首帧就是这个错时整轮重试，否则用户会看到
+		// "input was not accepted"。已经开始向客户端发流之后就不再重试。
+		acc := ""
+		doneSent := false
+		var lastErr any
+		for attempt := 0; attempt < 12; attempt++ {
+			if payload2, err := applyContext(payload, sessionMapGet(sid)); err == nil {
+				payload = payload2
+			}
+			resp, err := doUpstream(r.Context(), client, upstream, r, id, sid, payload)
+			if err != nil {
+				if !started {
+					writeJSON(w, 502, map[string]string{"error": "agent unavailable: " + err.Error()})
+					return
+				}
+				break
+			}
+			sc := bufio.NewScanner(resp.Body)
+			sc.Buffer(make([]byte, 64*1024), 1<<20)
+			first := true
+			retry := false
+			for sc.Scan() {
+				line := strings.TrimSpace(sc.Text())
+				if !strings.HasPrefix(line, "data:") {
+					continue
+				}
+				frame := []byte(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+				var ev struct {
+					Error any `json:"error"`
+				}
+				if json.Unmarshal(frame, &ev) != nil {
+					continue
+				}
+				if ev.Error != nil {
+					if first && isSendNotAccepted(frame) {
+						lastErr = ev.Error
+						retry = true
+						break
+					}
+					startStream()
+					emit(map[string]any{"error": ev.Error})
+					first = false
+					continue
+				}
+				first = false
+				startStream()
+				delta, ctx, done := a2aEvent(frame)
+				if sessionMapGet(sid) == "" && ctx != "" {
+					sessionMapSet(sid, ctx)
+				}
+				if delta != "" {
+					// 上游对同一段文本可能既发增量又发全量（append=false 表示替换），
+					// 这里按"已发过的前缀"去重，避免回复重复一遍。
+					switch {
+					case delta == acc:
+						// 全量重复，跳过
+					case strings.HasPrefix(delta, acc) && len(delta) > len(acc):
+						emit(map[string]string{"delta": delta[len(acc):]})
+						acc = delta
+					default:
+						emit(map[string]string{"delta": delta})
+						acc += delta
+					}
+				}
+				if done && !doneSent {
+					doneSent = true
+					emit(map[string]any{"done": true, "session_id": sid})
+				}
+			}
+			resp.Body.Close()
+			if !retry {
+				break
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
+		if lastErr != nil {
+			startStream()
+			emit(map[string]any{"error": lastErr})
+		}
+		startStream()
+		if !doneSent {
+			emit(map[string]any{"done": true, "session_id": sid})
+		}
 	}))
 
 	mux.HandleFunc("/poc/whoami", func(w http.ResponseWriter, r *http.Request) {
@@ -470,17 +685,20 @@ func main() {
 			log.Printf("identity=%s dce kubeconfig failed: %v", id, err)
 		}
 
+		ctxID := sessionMapGet(sid)
 		payload, _ := json.Marshal(map[string]any{
-			"jsonrpc": "2.0", "id": "poc-" + sid, "method": "message/send",
+			"jsonrpc": "2.0", "id": "poc-" + sid, "method": "SendMessage",
 			"params": map[string]any{
-				"contextId": sid,
 				"message": map[string]any{
-					"role": "user", "kind": "message", "contextId": sid,
-					"messageId": "poc-" + sid, "parts": parts,
+					"role": "ROLE_USER", "kind": "message",
+					"messageId": "poc-" + sid + "-" + strconv.FormatInt(time.Now().UnixNano(), 36), "parts": parts,
 				},
 				"configuration": map[string]any{"acceptedOutputModes": []string{"text"}},
 			},
 		})
+		if ctxID != "" {
+			payload, _ = applyContext(payload, ctxID)
+		}
 
 		resp, err := doUpstream(r.Context(), client, upstream, r, id, sid, payload)
 		if err != nil {
@@ -492,6 +710,11 @@ func main() {
 		if resp.StatusCode != 200 {
 			writeJSON(w, resp.StatusCode, map[string]string{"error": strings.TrimSpace(string(raw))})
 			return
+		}
+		if ctxID == "" {
+			if c := a2aContextID(raw); c != "" {
+				sessionMapSet(sid, c)
+			}
 		}
 		text := a2aText(raw)
 		if text == "" {
@@ -657,8 +880,12 @@ func doUpstream(ctx context.Context, client *http.Client, upstream string, r *ht
 		return nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	// kagent 1.0 只服务 A2A 1.0；不声明版本会被判成 0.3 并拒绝。
+	req.Header.Set("A2A-Version", "1.0")
 	req.Header.Set("Authorization", r.Header.Get("Authorization"))
 	// 仅供上游日志/审计；上游不应据此鉴权。
+	// kagent 1.0 用 X-User-Id 区分会话归属（每个 DCE 用户一个分区）。
+	req.Header.Set("X-User-Id", identity)
 	req.Header.Set("X-Sandbox-Identity", identity)
 	req.Header.Set("X-Sandbox-Session", sid)
 	return client.Do(req)
@@ -666,51 +893,76 @@ func doUpstream(ctx context.Context, client *http.Client, upstream string, r *ht
 
 // a2aText 从 A2A 响应里取出回复文本：先 artifacts，再最后一条 agent 消息。
 func a2aText(raw []byte) string {
-	var doc struct {
-		Result struct {
-			Artifacts []struct {
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"artifacts"`
-			History []struct {
-				Role  string `json:"role"`
-				Parts []struct {
-					Text string `json:"text"`
-				} `json:"parts"`
-			} `json:"history"`
-			Status struct {
-				Message struct {
-					Parts []struct {
-						Text string `json:"text"`
-					} `json:"parts"`
-				} `json:"message"`
-			} `json:"status"`
-		} `json:"result"`
-	}
-	if err := json.Unmarshal(raw, &doc); err != nil {
+	var doc map[string]any
+	if json.Unmarshal(raw, &doc) != nil {
 		return ""
 	}
-	for _, a := range doc.Result.Artifacts {
-		for _, p := range a.Parts {
-			if p.Text != "" {
-				return p.Text
-			}
-		}
+	res := asMap(doc["result"])
+	if res == nil {
+		return ""
 	}
-	for i := len(doc.Result.History) - 1; i >= 0; i-- {
-		if doc.Result.History[i].Role == "agent" {
-			for _, p := range doc.Result.History[i].Parts {
-				if p.Text != "" {
-					return p.Text
+	// A2A 1.0 把结果放在 result.task 里；0.3 直接在 result。
+	for _, holder := range []map[string]any{res, asMap(res["task"])} {
+		if holder == nil {
+			continue
+		}
+		if arts, ok := holder["artifacts"].([]any); ok {
+			for _, a := range arts {
+				if t := partsText(asMap(a)["parts"]); strings.TrimSpace(t) != "" {
+					return t
 				}
 			}
 		}
 	}
-	for _, p := range doc.Result.Status.Message.Parts {
-		if p.Text != "" {
-			return p.Text
+	if task := asMap(res["task"]); task != nil {
+		if t := lastAgentText(task["history"]); t != "" {
+			return t
+		}
+		if st := asMap(task["status"]); st != nil {
+			if m := asMap(st["message"]); m != nil {
+				if t := partsText(m["parts"]); t != "" {
+					return t
+				}
+			}
+		}
+	}
+	if t := lastAgentText(res["history"]); t != "" {
+		return t
+	}
+	if st := asMap(res["status"]); st != nil {
+		if m := asMap(st["message"]); m != nil {
+			return partsText(m["parts"])
 		}
 	}
 	return ""
+}
+
+func asMap(v any) map[string]any {
+	m, _ := v.(map[string]any)
+	return m
+}
+
+func lastAgentText(v any) string {
+	arr, ok := v.([]any)
+	if !ok {
+		return ""
+	}
+	for i := len(arr) - 1; i >= 0; i-- {
+		m := asMap(arr[i])
+		if m == nil {
+			continue
+		}
+		if role, _ := m["role"].(string); role == "ROLE_AGENT" || role == "agent" {
+			if t := partsText(m["parts"]); strings.TrimSpace(t) != "" {
+				return t
+			}
+		}
+	}
+	return ""
+}
+
+// isSendNotAccepted 判断首帧是否为「Session 还在拉起，稍后重试」。
+func isSendNotAccepted(frame []byte) bool {
+	t := string(frame)
+	return strings.Contains(t, "KAGENT_SEND_NOT_ACCEPTED") || strings.Contains(t, "was not accepted")
 }

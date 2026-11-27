@@ -191,3 +191,60 @@ kagent agent invoke ... / 或走 kagent UI
 - **快照存储**：`snapshotPolicy.location` 指向集群内 rustfs（`s3://ate-snapshots/...`），
   不是云对象存储；换环境要改。
 - **`registry:2` 是 POC 级**：单副本 + emptyDir，没有 GC、没有 TLS、没有认证。
+
+## 七、适配器从 0.10 迁到 1.0（已实测跑通）
+
+`substrate-adapter` 原来直接对 kagent 0.10 的 sandbox A2A 入口做转发，把
+「由 JWT 身份推导出的会话 id」当 `contextId` 塞给上游。1.0 里这条路走不通了，
+三处协议差异必须一起改（只改一处会得到很难懂的报错）：
+
+| 差异 | 0.10 | 1.0 | 不改的报错 |
+|---|---|---|---|
+| A2A 路径 | `/api/a2a-sandboxes/<ns>/<agent>/` | **`/agents/<ns>/<agent>`** | 404 / 空 |
+| 协议版本 | 无 | 必须 `A2A-Version: 1.0` | `this version is not supported: requested "0.3", served "1.0"` |
+| 方法名 | `message/send`、`message/stream` | **`SendMessage`、`SendStreamingMessage`** | `method not found` |
+| 消息角色 | `"user"` | **`"ROLE_USER"`**（枚举） | `message role cannot be unspecified` |
+| 会话 | 调用方自选 `contextId` | **服务端创建 Session**，`contextId` 由服务端生成 UUID | `not found` / `input was not accepted` |
+
+### 会话映射（关键）
+
+1.0 不允许调用方命名 Session，所以适配器改成：
+
+1. 仍然用 `hash(身份 + conversation_id)` 算出**逻辑** `sid`（对外契约不变）；
+2. 本地维护 `sid -> contextId` 映射，落盘到 `SESSION_MAP_FILE`（默认 `/data/adapter-sessions.json`）；
+3. 第一次访问某会话时**不带 `contextId`**，让上游新建 Session，并从流里回填 `contextId`；
+4. 之后都带上这个 `contextId`，同一个 `conversation_id` 就会命中同一个沙箱；
+5. 适配器重启后从文件恢复映射，不会把同一个会话拆成两个沙箱。
+
+> 局限：文件在 Pod 的 `emptyDir` 里，**Pod 重建**（不是容器重启）仍会丢映射。
+> 要做到完全无状态，应改成调 gRPC `SessionService/CreateSession` 并用
+> `request_id = hash(身份+会话)` 做幂等（服务端按 request id 去重）。
+
+### 新建会话的竞态
+
+新建 Session 时 actor 还在拉起，上游会先回一个
+`KAGENT_SEND_NOT_ACCEPTED / "input was not accepted; retry after the session becomes available"`。
+适配器对**首帧**是这个错误的请求整轮重试（最多 12 次、间隔 300ms），
+一旦已经开始向浏览器发流就不再重试，避免前端看到"半截回复"。
+
+### 身份分区
+
+1.0 用 `X-User-Id` 头划分会话归属。适配器把 DCE 的 `identityOf(sub, preferred)`
+（例如 `alice`）塞进这个头，于是**每个 DCE 用户只看到自己的会话**，
+这也正是 BYOA 要的隔离语义。
+
+## 八、端到端验证结果（2026-11-27，jinye）
+
+链路：`curl/扩展 → kgateway(/sandbox) → substrate-adapter → kagent 1.0 A2A → substrate actor(gVisor) → DeepSeek`
+
+| # | 用例 | 结果 | 耗时 |
+|---|---|---|---|
+| 1 | 新会话首问 `9+9` | `9+9 等于 18。` | 7.5s（含冷启沙箱） |
+| 2 | 同会话追问"刚才我问什么" | `9+9 等于几？`（历史正确） | 1.7s |
+| 3 | 另一个会话问"我们之前聊过什么" | `无。`（会话隔离） | 2.0s |
+| 4 | 非流式 `/poc/chat` | `5+5 等于 10。` | 1.5s |
+| 5 | 经 kgateway `/sandbox/poc/chat/stream` | 逐个 delta 流式返回 `7+7 等于 14。` | 2.5s |
+| 6 | 会话映射落盘 | `session mapping u-xxx -> 01a21b35-...`（adapter 日志） | — |
+
+扩展侧契约没变：`service_worker.js` 仍然调 `/sandbox/poc/whoami` 和 `/sandbox/poc/chat`，
+所以浏览器那一端不需要改，只要 `gatewayBase` 指到 `http://<节点IP>:<NodePort>`。

@@ -34,9 +34,14 @@ spec:
             - {name: JWT_AUDIENCE, value: "${JWT_AUDIENCE}"}
             - {name: DCE_URL, value: "${DCE_ORIGIN}"}
             - {name: DCE_CLUSTER, value: "${DCE_CLUSTER}"}
-            - {name: UPSTREAM, value: "http://kagent-controller.${NS_KAGENT}.svc.cluster.local:8083/api/a2a-sandboxes/${NS_KAGENT}/dsh-sandbox/"}
+            # kagent 1.0 的 A2A 入口是 /agents/<namespace>/<agent>（0.10 是 /api/a2a-sandboxes/...）
+            - {name: UPSTREAM, value: "http://kagent-controller.${NS_KAGENT}.svc.cluster.local:8083/agents/${NS_KAGENT}/${AGENT_NAME}"}
+            # 1.0 的 Session 由服务端创建，本地推导的 sid 只是逻辑会话键；
+            # 映射（sid -> 上游 contextId）落盘，适配器重启后同一个会话不会被拆成两个沙箱。
+            - {name: SESSION_MAP_FILE, value: "/data/adapter-sessions.json"}
           volumeMounts:
             - {name: jwks, mountPath: /etc/adapter, readOnly: true}
+            - {name: sessions, mountPath: /data}
           readinessProbe:
             httpGet: {path: /healthz, port: 9099}
             initialDelaySeconds: 2
@@ -51,6 +56,8 @@ spec:
       volumes:
         - name: jwks
           configMap: {name: dce-jwks}
+        - name: sessions
+          emptyDir: {}
 ---
 apiVersion: v1
 kind: Service

@@ -205,3 +205,24 @@
   重启后 `kubectl get node -o wide` 确认 `KERNEL` 变成 6.8.x，kagent 会自动重试 golden 快照。
 - **不要**为了绕这个去改 substrate 源码回退 `mount(2)`：层数一多就会撞页面大小限制，
   而且下游升级要一直背这个补丁。
+
+## 20. 集群里的 substrate 被"重装"之后，一堆东西会静默失效
+- **现象**：本来跑通的栈，过一段时间 `Agent` 还在、`Ready=True`，但发消息一直
+  `input was not accepted; retry after the session becomes available`。
+- **原因**：有人/某个平台侧把 substrate 重新 `helm install` 了一遍，于是：
+  1. `ate-system` 的 CRD 被重建 → `WorkerPool`、`SandboxConfig` 等**对象全没了**；
+  2. 我们给 Deployment 打的 **pod 级 sysctl 补丁也没了** → `ate-api-server` 立刻
+     `listen tcp 0.0.0.0:443: bind: permission denied` 而 CrashLoop；
+  3. 旧 Helm release 的遗留对象（CRD / ResourceQuota / ServiceAccount）会让
+     `kagent install` 报 `invalid ownership metadata ... cannot be imported`。
+- **处理**：
+  - CRD 遗留：给 CRD 补 `app.kubernetes.io/managed-by=Helm` 和
+    `meta.helm.sh/release-name/-namespace` 三个标注，让它能被新 release 接管；
+  - 其它遗留对象（如 `atelet-critical-pods` ResourceQuota）直接删，让 chart 重建；
+  - 补回 sysctl 补丁（`ate-api-server` 和 worker 的 `kagent-default` 两个 Deployment）；
+  - **`WorkerPool` 需要自己重建**（chart 默认 `substrateWorkerPool.create=false`），
+    参考 `templates/substrate-workerpool.yaml`，至少要 `replicas / workerImage /
+    sandboxClasses[].configRef / template.serviceAccountName / template.resources`。
+- **教训**：判断"栈还活着"不能只看 `Agent Ready=True`，要同时看
+  `kubectl -n ate-system get pods`、`kubectl -n kagent get workerpool` 和
+  `substrate.leases` 里有没有 actor 在续租。`Agent Ready` 只代表 golden 快照在。
