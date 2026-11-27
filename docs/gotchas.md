@@ -8,6 +8,23 @@
 - **处理**：给 runsc 注入 `-ignore-cgroups`；默认 `auto` 探测（能写就不注入），普通 x86 节点自动跳过。
   这只在 macOS/OrbStack 上需要，不是可移植配置。
 
+
+> **2026-11-27 补充（实测数据）**：jinye 的盘确实是短板，但要分清"顺序"和"随机"：
+> ```bash
+> dd bs=1M count=512 conv=fdatasync      # 写 163 MB/s（看着还行）
+> dd bs=4k count=5120 oflag=direct       # 4K 随机写 1.6 MB/s ≈ 400 IOPS（很差）
+> ```
+> VMware 虚拟盘没缓存电池时就是这样。**所以"沙箱恢复慢"在旧栈成立**：旧栈每次 resume 要搬
+> 几百 MB 内存镜像 + 大量小文件 fsync，正好踩在 400 IOPS 上。
+>
+> 但新栈（substrate 1.0）把这块 I/O 移出了关键路径：golden 快照总量只有 **<1MB**
+> （`du -sh /var/lib/ate/snapshots` ≈ 948K），恢复只碰几个文件；同一台机器上实测
+> 新会话首问 **4.5s / 后续 1.4s / TTFB 1.1s**。
+>
+> 结论：**盘还是慢的，只是现在不用它搬大东西了**。一旦会话体量变大
+> （装了 skills、下载了依赖、`/data` 写了很多文件），快照会变大，restore 会重新被这块盘拖住
+> —— 那时该换 SSD/NVMe 或给虚拟机开 write-back 缓存。
+
 ## 2. checkpoint/restore 慢（磁盘 I/O，不是平台）
 - **现象**：restore 8~11s、checkpoint 8~9s（快盘应 <1s）。
 - **原因**：checkpoint/restore 本质是"把内存快照写盘/读盘"，**瓶颈在磁盘**；
