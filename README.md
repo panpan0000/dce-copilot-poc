@@ -17,7 +17,7 @@ Agent 用这个用户自己的身份调用 DCE API 和 kubectl。
 | 门槛 | 要求 | 不满足时你会看到 | 能绕过吗 |
 |---|---|---|---|
 | **内核** | **≥ 6.6.23**（Ubuntu 22.04 默认 5.15 不行） | `Agent` 卡在 `waiting for the ActorTemplate golden snapshot`；atelet 报 `while creating overlay superblock: invalid argument` | ❌ 不能，上游无回退分支 |
-| **K8s** | **≥ 1.37** | substrate 起不来（缺 `PodCertificateRequest` / `ClusterTrustBundle`） | ❌ 不能，且必须逐个小版本升 |
+| **K8s** | **≥ 1.34 + 开 3 个 feature gate**（1.37 起默认开） | substrate 起不来（`PodCertificateRequest` / `ClusterTrustBundle` / `certificates.k8s.io/v1beta1` 缺失） | ✅ 低版本手开 gate 即可，**不是非 1.37 不可** |
 | **Helm** | **3.x** | `kagent install` 报 `rendered controller deployment has no service account` | ✅ 降到 Helm 3.22 |
 | **镜像可达** | 集群能拉 `ghcr.io/kagent-dev/*` | atelet 每轮**精确 5 分钟**超时：`imageCache.EnsureImage(...): context canceled` | ✅ 集群内 `registry:2` 中转 |
 

@@ -14,7 +14,7 @@
 | 条件 | 要求 | 不满足的症状 | 能否绕过 |
 |---|---|---|---|
 | **内核** | **≥ 6.6.23**（建议 6.8） | `atelet` 报 `while creating overlay superblock: invalid argument`；`Agent` 卡在 `waiting for the ActorTemplate golden snapshot` | ❌ 不能。上游明确写死，无回退分支 |
-| **K8s** | **≥ 1.37** | substrate 1.0 依赖 `PodCertificateRequest`、`ClusterTrustBundle`、`certificates.k8s.io/v1beta1` | ❌ 不能（kubeadm 也不能一跳，必须 1.34→1.35→1.36→1.37 逐级） |
+| **K8s** | **≥ 1.34**，并开启 3 个 feature gate + `certificates.k8s.io/v1beta1` | substrate 依赖 `PodCertificateRequest`、`ClusterTrustBundle`、`ClusterTrustBundleProjection` | ✅ 低版本**手开 gate 即可**；1.37 起默认开启，所以升到 1.37 只是省掉手工配置 |
 | **Helm** | **3.x**（不是 4.x） | `kagent install` 报 `rendered controller deployment has no service account` / `invalid Helm values` | ✅ 降级 Helm 到 3.22 即可 |
 | **镜像可达** | 集群能拉 `ghcr.io/kagent-dev/...` | atelet 每轮精确 5 分钟超时：`imageCache.EnsureImage(...): while waiting for pull ...: context canceled` | ✅ 集群内镜像中转（见第三节） |
 | **模型 provider** | kagent CLI 的 provider 枚举里**没有 DeepSeek** | `kagent install` 报 `OPENAI_API_KEY is not set` | ✅ 用 OpenAI 兼容的 `ModelConfig` + `openAI.baseUrl` 指到 DeepSeek |
@@ -34,6 +34,33 @@ kubectl get node -o wide     # KERNEL 应变成 6.8.x
 
 > ⚠️ **只升承载 worker 的节点**。如果 GPU 节点和 master 是同一台，不要动它：
 > vGPU/GRID 驱动对内核版本敏感，换内核要重装驱动，风险远大于收益。
+
+### 关于 K8s 版本：1.35 能跑，不是非 1.37 不可
+
+上游自己的开发脚本 `hack/create-kind-cluster.sh` 里写得很清楚
+（注释原文："They are not enabled by default as of Kubernetes v1.36"）：
+
+```yaml
+featureGates:
+  ClusterTrustBundle: true
+  ClusterTrustBundleProjection: true
+  PodCertificateRequest: true
+runtimeConfig:
+  "certificates.k8s.io/v1beta1": "true"
+```
+
+也就是说：
+
+- **硬要求是这几个特性可用**（`PodCertificateRequest` 从 1.34 起是 alpha），**不是某个具体版本**。
+- 在 **1.34 / 1.35 / 1.36** 上，只要给 kube-apiserver / kube-controller-manager /
+  kube-scheduler / kubelet 加 `--feature-gates=...`，并给 apiserver 加
+  `--runtime-config=certificates.k8s.io/v1beta1=true`，就能跑通。
+  **社区在 1.35 上跑通是合理的。**
+- **1.37 起这些默认开启**：本集群 1.37.3 的 apiserver 命令行里**没有任何** `--feature-gates`
+  或 `--runtime-config` 参数，`/apis/certificates.k8s.io/v1beta1` 直接可用。
+- 所以「升到 1.37」的真实收益是**省掉手工开 gate、少一次配置分叉**，属于工程取舍，
+  不是 substrate 的硬性依赖。反过来，1.35 上跑要注意 controller-manager 和 kubelet 也要开，
+  只开 apiserver 会出现「Pod 一直 Pending、证书签不出来」。
 
 ## 二、新栈的 API 形状（和 0.10 完全不一样）
 
