@@ -1,0 +1,10 @@
+# 用完整的 DSH 底座（含 agent-presets/plugins），只把 SRE agent 的应用代码搬过来，
+# 避免原镜像里 DSH 安装不完整导致 preset 挂载失败。
+FROM release-ci.daocloud.io/common-ci/dce-copilot-dsh-a2a:0.4.1-ca
+USER 0
+COPY --from=release-ci.daocloud.io/common-ci/dce-copilot-sre-agent:0.2.0-x86 /app /app
+COPY --from=release-ci.daocloud.io/common-ci/dce-copilot-sre-agent:0.2.0-x86 /opt/sre /opt/sre
+RUN chmod 0755 /opt/sre/start.sh
+USER 10001
+WORKDIR /home/agent/work
+ENTRYPOINT ["/bin/sh","/opt/sre/start.sh"]

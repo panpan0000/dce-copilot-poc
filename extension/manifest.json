@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "DCE Agent POC Bridge",
-  "version": "0.6.0",
-  "description": "在 DCE 页面内把当前用户会话转发到 Kubernetes POC Agent。",
+  "version": "0.6.1",
+  "description": "在 DCE 页面内把当前用户会话转发到 Kubernetes POC Agent（支持 kubectl / sre-cli 代理）。",
   "permissions": [
     "scripting",
     "storage"

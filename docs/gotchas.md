@@ -243,3 +243,34 @@
 - **教训**：判断"栈还活着"不能只看 `Agent Ready=True`，要同时看
   `kubectl -n ate-system get pods`、`kubectl -n kagent get workerpool` 和
   `substrate.leases` 里有没有 actor 在续租。`Agent Ready` 只代表 golden 快照在。
+
+## 21. 浏览器侧三连坑：CORS 预检 / PNA / 网关 JWT
+
+按出现顺序，症状都长成 "Failed to fetch / Agent Gateway 不可达"，但根因不同：
+
+1. **CORS 预检被 JWT 拦**：kgateway 的 `jwtAuth` 挂在 Gateway 上时，`OPTIONS` 预检也会被要求带 token → 401 → 浏览器直接判失败。
+   修：给 TrafficPolicy 加 `cors`（allowOrigins/allowMethods/allowHeaders），预检由 CORS 过滤器直接应答。
+2. **Chrome Private Network Access**：公开 HTTPS 页面（`demo-tf-alpha.daocloud.cn`）fetch 私有 IP（`172.30.40.x`）时，
+   预检响应必须带 `access-control-allow-private-network: true`，否则被拦。
+3. **网关 Pod Pending**：`poc-gateway` 有历史 ReplicaSet 残留时，新 Pod 会 Pending，NodePort 无后端 → 浏览器看到不可达。
+   排查：`kubectl -n <ns> get rs | grep <name>`，把孤儿 RS 缩到 0 并删除。
+
+## 22. kubectl 在沙箱里 401：Authorization 头被 egress 吃掉
+
+现象：`kubectl --token=<x>` 明确传了 token（`sh -x` 可证），adapter 侧日志却是 `auth=""`。
+结论：**别指望 header**。把身份放进 URL 路径（`/poc/k8s/s/<identity>/...`），镜像里用 wrapper 脚本运行时生成 kubeconfig。
+
+## 23. SRE agent 的 DSH 起不来（两层）
+
+1. `dsh: user patch-layer watching requires the Cordis HMR service`
+   —— web profile 会无条件 `watchUserPatches`，容器里没有 HMR 服务就抛错。patch 掉该分支（无 HMR 时直接返回）。
+2. 修完后 `agent-preset-invalid: preset "standard" failed to mount`
+   —— 原镜像的 DSH 安装不完整（profile 的 node_modules 只有 1 个包）。**换完整底座**（`dce-copilot-dsh-a2a:0.4.1-ca`）重建。
+3. 最后 `DSH did not invoke cluster inspection tool`
+   —— 原校验只认 `cluster-inspect.js` 那条命令，而 DSH 实际直接跑 kubectl 巡检（效果更好）。放宽为"任意 bash 工具成功即算合格"。
+
+## 24. kagent controller 丢 leader 选举 = 网关 502
+
+现象：`/sandbox/poc/chat` 返回 502，adapter 日志 `dial tcp ...:8083: connect: connection refused`。
+根因：controller Pod 因节点 `DiskPressure` 被驱逐/Pending，`leader election lost`。
+处理：把 controller 显式调度到健康节点（nodeSelector），别让它落在长期磁盘吃紧的 GPU 节点上。

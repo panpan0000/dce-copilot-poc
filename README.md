@@ -9,6 +9,17 @@ Agent 用这个用户自己的身份调用 DCE API 和 kubectl。
 
 ---
 
+## ✅ 当前状态（2026-11-28）
+
+| 能力 | 状态 | 说明 |
+|---|---|---|
+| 网页对话（扩展） | ✅ | 经 kgateway NodePort → adapter → kagent 1.0 A2A |
+| `kubectl`（按用户 RBAC） | ✅ | 身份走 URL 路径 `/poc/k8s/s/session-<ctx>/...`，已验到 `403 User "alice"` |
+| `sre-cli inspect/report` | ✅ | 走 adapter `/poc/sre/*`，绕开挂死的 agentgateway；巡检 `status=completed` |
+| DSH 作为 actor | 🟡 | golden 已能通过（修掉 `/data` 只读、telemetry 身份两个坑），对话文本仍在收尾 |
+
+细节与踩坑记录：[docs/live-status.md](docs/live-status.md)、[docs/gotchas.md](docs/gotchas.md)（#21 起是这一轮新增）。
+
 ## ⛔️ 先说限制：substrate 1.0 / kagent 1.0 的硬门槛
 
 新栈（substrate **1.0.0** + kagent **1.0.0**）解决了旧栈的 gVisor 稳定性问题，但把环境门槛抬高了。

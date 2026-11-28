@@ -170,9 +170,11 @@ async function callGateway(tabId, path, init, timeoutMs) {
     return { ok: response.ok, status: response.status, body };
   } catch (error) {
     if (error?.name === 'AbortError') {
-      throw new Error('Agent Gateway 请求超时');
+      throw new Error(`Agent Gateway 请求超时（${GATEWAY_BASE}${path}，${Math.round(timeoutMs/1000)}s）`);
     }
-    throw new Error('Agent Gateway 不可达');
+    // 把真实原因带出来：VPN 断 / 端口不通 / Chrome 私有网络访问(PNA) 拦截 都是 TypeError: Failed to fetch
+    throw new Error(`Agent Gateway 不可达（${GATEWAY_BASE}${path}）：${error?.message || error}。` +
+      '排查顺序：① Shimo/VPN 是否连着集群 ② curl 同地址是否能通 ③ Chrome 若报 PNA，需要网关返回 access-control-allow-private-network: true');
   } finally {
     clearTimeout(timeout);
   }

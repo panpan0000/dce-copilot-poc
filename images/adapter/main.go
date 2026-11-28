@@ -216,6 +216,10 @@ func identityOf(sub, preferred string) string {
 // 所以这里维护 sid(本地推导) -> contextId(上游) 的映射，并落盘，避免适配器重启后
 // 同一个会话被拆成两个沙箱（历史丢失）。
 var (
+	// 沙箱里没有用户 JWT 时，kubectl 用 actor 身份（session-<contextId>）来认领凭据。
+	idMu    sync.Mutex
+	idJWT   = map[string]string{} // identity -> 最近一次见到的 JWT
+	ctxOwner = map[string]string{} // contextId -> identity
 	sessionMapPath = env("SESSION_MAP_FILE", "/data/adapter-sessions.json")
 	sessionMapMu   sync.Mutex
 	sessionMap     = map[string]string{}
@@ -366,6 +370,209 @@ func partsText(v any) string {
 	return out
 }
 
+
+// ---- /poc/k8s：把沙箱里的 kubectl 请求转成"用户身份"的 apiserver 调用 --------
+// 沙箱里不存放用户的客户端证书；kubectl 指向 adapter，用 DCE JWT 鉴权，
+// adapter 用该用户的 clustercert 调 apiserver，权限仍由 K8s RBAC 判定。
+func kubeField(kubeconfig, key string) []byte {
+	for _, line := range strings.Split(kubeconfig, "\n") {
+		if i := strings.Index(line, key); i >= 0 {
+			v := strings.TrimSpace(line[i+len(key):])
+			if b, err := base64.StdEncoding.DecodeString(v); err == nil {
+				return b
+			}
+			return []byte(v)
+		}
+	}
+	return nil
+}
+
+func rememberIdentity(identity, jwt string) {
+	if identity == "" || jwt == "" {
+		return
+	}
+	idMu.Lock()
+	idJWT[identity] = jwt
+	idMu.Unlock()
+}
+
+func rememberCtxOwner(ctx, identity string) {
+	if ctx == "" || identity == "" {
+		return
+	}
+	idMu.Lock()
+	ctxOwner[ctx] = identity
+	idMu.Unlock()
+}
+
+// jwtFor 支持两种凭据：直接给用户 JWT，或给沙箱自己的 actor 名（session-<contextId>）。
+func jwtFor(tok string) (string, bool) {
+	if strings.HasPrefix(tok, "session-") {
+		ctx := strings.TrimPrefix(tok, "session-")
+		idMu.Lock()
+		id := ctxOwner[ctx]
+		jwt := idJWT[id]
+		idMu.Unlock()
+		if jwt == "" {
+			return "", false
+		}
+		return jwt, true
+	}
+	return tok, true
+}
+
+func credBlock(r *http.Request) string {
+	tok := bearerRaw(r)
+	return "\n\n【本轮凭据（POC）】\n" +
+		"DCE_TOKEN=" + tok + "\n" +
+		"用法：kubectl 已配好（无需 token）；dce-cli/sre-cli 需要把上面的值写在命令前，例如：\n" +
+		"  DCE_TOKEN=" + tok + " dce-cli GET /apis/kpanda.io/v1alpha1/asl/namespaces?page=1&pageSize=50\n" +
+		"  SRE_TOKEN=" + tok + " sre-cli report"
+}
+
+// ---- /poc/sre: 沙箱里的 sre-cli 经 adapter 转 SRE 后端（绕开挂住的 agentgateway）----
+func sreProxyHandler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+		tok := bearerRaw(r)
+		rest := strings.TrimPrefix(path, "/poc/sre")
+		if strings.HasPrefix(path, "/poc/sre/s/") {
+			rem := strings.TrimPrefix(path, "/poc/sre/s/")
+			i := strings.Index(rem, "/")
+			if i <= 0 {
+				http.Error(w, "bad actor path", http.StatusBadRequest)
+				return
+			}
+			tok = rem[:i]
+			rest = rem[i:]
+		}
+		if _, ok := jwtFor(tok); !ok {
+			http.Error(w, "actor 还没有绑定用户（先发一条对话再试）", http.StatusUnauthorized)
+			return
+		}
+		backend := env("SRE_BACKEND_URL", "http://sre-poc.watsons-agent-poc.svc.cluster.local:8080")
+		btok := os.Getenv("SRE_BACKEND_TOKEN")
+		if btok == "" {
+			http.Error(w, "adapter 缺少 SRE_BACKEND_TOKEN", http.StatusServiceUnavailable)
+			return
+		}
+		target := backend + "/v1/reports/latest"
+		method := r.Method
+		var body io.Reader
+		switch {
+		case rest == "/report":
+			target, method = backend+"/v1/reports/latest", http.MethodGet
+		case rest == "/inspect":
+			target, method = backend+"/v1/inspections", http.MethodPost
+			body = bytes.NewReader([]byte(`{"cluster":"orbstack","scope":"health"}`))
+		default:
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		req, err := http.NewRequestWithContext(r.Context(), method, target, body)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		req.Header.Set("Authorization", "Bearer "+btok)
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := (&http.Client{Timeout: 180 * time.Second}).Do(req)
+		if err != nil {
+			http.Error(w, "sre backend: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}
+}
+
+func k8sProxyHandler(v *verifier) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// 身份来源两种：URL 路径 /poc/k8s/s/<token>/...（沙箱内 kubectl 用，
+		// 因为 Authorization 头会被 egress 侧吃掉），或 Bearer 头（本机/调试用）。
+		path := r.URL.Path
+		tok := bearerRaw(r)
+		rest := strings.TrimPrefix(path, "/poc/k8s")
+		if strings.HasPrefix(path, "/poc/k8s/s/") {
+			rem := strings.TrimPrefix(path, "/poc/k8s/s/")
+			i := strings.Index(rem, "/")
+			if i <= 0 {
+				http.Error(w, "bad actor path", http.StatusBadRequest)
+				return
+			}
+			tok = rem[:i]
+			rest = rem[i:]
+		}
+		if rest == "" {
+			rest = "/"
+		}
+		if tok == "" {
+			http.Error(w, "unauthorized: missing actor identity", http.StatusUnauthorized)
+			return
+		}
+		preview := tok
+		if len(preview) > 24 {
+			preview = preview[:24] + "..."
+		}
+		log.Printf("k8s-proxy %s %s via=%q", r.Method, rest, preview)
+		if !strings.HasPrefix(tok, "session-") {
+			if _, _, err := bearer(v, r); err != nil {
+				http.Error(w, "unauthorized: "+err.Error(), http.StatusUnauthorized)
+				return
+			}
+		}
+		jwt, ok := jwtFor(tok)
+		if !ok {
+			http.Error(w, "actor 还没有绑定用户（先发一条对话再试）", http.StatusUnauthorized)
+			return
+		}
+		kc, err := dceKubeconfig(jwt)
+		if err != nil {
+			http.Error(w, "kubeconfig: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		certPEM, keyPEM := kubeField(kc, "client-certificate-data:"), kubeField(kc, "client-key-data:")
+		if len(certPEM) == 0 || len(keyPEM) == 0 {
+			http.Error(w, "kubeconfig has no client certificate", http.StatusBadGateway)
+			return
+		}
+		pair, err := tls.X509KeyPair(certPEM, keyPEM)
+		if err != nil {
+			http.Error(w, "client cert: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		tr := &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true, Certificates: []tls.Certificate{pair}}}
+		defer tr.CloseIdleConnections()
+		target := "https://kubernetes.default.svc.cluster.local" + rest
+		if r.URL.RawQuery != "" {
+			target += "?" + r.URL.RawQuery
+		}
+		body, _ := io.ReadAll(io.LimitReader(r.Body, 4<<20))
+		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(body))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		req.Header.Set("Accept", r.Header.Get("Accept"))
+		if ct := r.Header.Get("Content-Type"); ct != "" {
+			req.Header.Set("Content-Type", ct)
+		}
+		resp, err := (&http.Client{Timeout: 120 * time.Second, Transport: tr}).Do(req)
+		if err != nil {
+			http.Error(w, "apiserver: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		if ct := resp.Header.Get("Content-Type"); ct != "" {
+			w.Header().Set("Content-Type", ct)
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+	}
+}
+
 func main() {
 	var (
 		addr     = env("ADAPTER_ADDR", ":9099")
@@ -407,6 +614,7 @@ func main() {
 			return
 		}
 		id := identityOf(sub, pref)
+		rememberIdentity(id, bearerRaw(r))
 		sid := sessionID(id)
 
 		body, err := io.ReadAll(io.LimitReader(r.Body, 8<<20))
@@ -415,6 +623,7 @@ func main() {
 			return
 		}
 		ctxID := sessionMapGet(sid)
+		rememberCtxOwner(ctxID, id)
 		rewritten, err := applyContext(body, ctxID)
 		if err != nil {
 			http.Error(w, "invalid json-rpc body: "+err.Error(), http.StatusBadRequest)
@@ -491,6 +700,7 @@ func main() {
 			return
 		}
 		sid := sessionID(id)
+		rememberIdentity(id, bearerRaw(r))
 		if in.ConversationID != "" {
 			if !convIDRe.MatchString(in.ConversationID) {
 				http.Error(w, "invalid conversation_id", http.StatusBadRequest)
@@ -498,12 +708,13 @@ func main() {
 			}
 			sid = sessionIDFor(id, in.ConversationID)
 		}
-		parts := []map[string]any{{"kind": "text", "text": in.Message}}
+		parts := []map[string]any{{"kind": "text", "text": in.Message + credBlock(r)}}
 		parts = append(parts, map[string]any{"kind": "data", "data": map[string]string{"sreToken": bearerRaw(r)}})
 		if kc, kerr := dceKubeconfig(bearerRaw(r)); kerr == nil {
 			parts = append(parts, map[string]any{"kind": "data", "data": map[string]string{"kubeconfig": kc}})
 		}
 		ctxID := sessionMapGet(sid)
+		rememberCtxOwner(ctxID, id)
 		payload, _ := json.Marshal(map[string]any{
 			"jsonrpc": "2.0", "id": "str-" + sid, "method": "SendStreamingMessage",
 			"params": map[string]any{
@@ -542,7 +753,7 @@ func main() {
 		acc := ""
 		doneSent := false
 		var lastErr any
-		for attempt := 0; attempt < 12; attempt++ {
+		for attempt := 0; attempt < 90; attempt++ {
 			if payload2, err := applyContext(payload, sessionMapGet(sid)); err == nil {
 				payload = payload2
 			}
@@ -586,6 +797,7 @@ func main() {
 				delta, ctx, done := a2aEvent(frame)
 				if sessionMapGet(sid) == "" && ctx != "" {
 					sessionMapSet(sid, ctx)
+					rememberCtxOwner(ctx, id)
 				}
 				if delta != "" {
 					// 上游对同一段文本可能既发增量又发全量（append=false 表示替换），
@@ -610,7 +822,7 @@ func main() {
 			if !retry {
 				break
 			}
-			time.Sleep(300 * time.Millisecond)
+			time.Sleep(time.Second)
 		}
 		if lastErr != nil {
 			startStream()
@@ -631,6 +843,9 @@ func main() {
 		id := identityOf(sub, pref)
 		writeJSON(w, 200, map[string]string{"username": id, "session_id": sessionID(id)})
 	})
+	mux.HandleFunc("/poc/sre/", withCORS(sreProxyHandler()))
+	mux.HandleFunc("/poc/k8s/", withCORS(k8sProxyHandler(v)))
+	mux.HandleFunc("/poc/k8s", withCORS(k8sProxyHandler(v)))
 	mux.HandleFunc("/poc/chat", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "POST only", http.StatusMethodNotAllowed)
@@ -677,7 +892,7 @@ func main() {
 			"【规则三：别猜权限】不要事先声称没有权限，先执行；命令真报错就把原始错误原样贴出来（如 403 Forbidden）。" +
 			"【规则四：别编输出】命令输出、HTTP 状态码、报告字段都要来自真实执行。用户请求："
 
-		parts := []map[string]any{{"kind": "text", "text": preamble + in.Message}}
+		parts := []map[string]any{{"kind": "text", "text": preamble + in.Message + credBlock(r)}}
 		parts = append(parts, map[string]any{"kind": "data", "data": map[string]string{"sreToken": bearerRaw(r)}})
 		if kc, err := dceKubeconfig(bearerRaw(r)); err == nil {
 			parts = append(parts, map[string]any{"kind": "data", "data": map[string]string{"kubeconfig": kc}})
@@ -686,6 +901,7 @@ func main() {
 		}
 
 		ctxID := sessionMapGet(sid)
+		rememberCtxOwner(ctxID, id)
 		payload, _ := json.Marshal(map[string]any{
 			"jsonrpc": "2.0", "id": "poc-" + sid, "method": "SendMessage",
 			"params": map[string]any{
@@ -714,6 +930,7 @@ func main() {
 		if ctxID == "" {
 			if c := a2aContextID(raw); c != "" {
 				sessionMapSet(sid, c)
+				rememberCtxOwner(c, id)
 			}
 		}
 		text := a2aText(raw)

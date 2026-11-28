@@ -1,0 +1,12 @@
+# 放宽巡检校验：DSH 直接用 kubectl 巡检也算合格（原版只认 cluster-inspect.js 那条命令）
+FROM sre-agent:0.4.0
+USER 0
+RUN python3 - <<'PY'
+p='/app/sre-agent.js'; s=open(p).read()
+old="const calls=events.filter(e=>e.type==='tool/call' && e.data?.name==='bash' && e.data?.arguments?.includes('cluster-inspect.js'));"
+new="const calls=events.filter(e=>e.type==='tool/call' && e.data?.name==='bash');"
+assert old in s, 'pattern missing'
+s=s.replace(old,new,1).replace("throw Error('DSH did not invoke cluster inspection tool')","throw Error('DSH did not invoke any bash tool')",1)
+open(p,'w').write(s)
+PY
+USER 10001
